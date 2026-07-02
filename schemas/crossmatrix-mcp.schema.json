@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knowledge-framework.dev/schemas/crossmatrix-mcp.schema.json",
+  "title": "CrossMatrixMcpRequest",
+  "description": "LLM-facing MCP contract for crossmatrix. Two entry tools: crossmatrix.command (mutation-first writes) and crossmatrix.query (reads/analyses). Extends a mutation-first request envelope (requestId/modelId/actor + op/payload) to the observation/cell model. Observation-only: command write ops carry observation TOKENS (+evidence), never numbers — the engine rejects numeric weights and unknown tokens (fail-fast, recoverable). Responses carry HATEOAS `links` (legal next ops). Governance (status lifecycle, audit_log, actor) is MCP-LAYER state, not core data.",
+  "oneOf": [ { "$ref": "#/$defs/CommandRequest" }, { "$ref": "#/$defs/QueryRequest" } ],
+  "$defs": {
+    "Actor": {
+      "type": "object", "required": ["actorType", "persona"], "additionalProperties": false,
+      "properties": {
+        "actorType": { "type": "string", "enum": ["llm", "human", "system"] },
+        "persona": { "type": "string", "enum": ["model_admin", "observer", "analyst", "reviewer", "runtime_validator"] }
+      }
+    },
+    "CommandRequest": {
+      "type": "object",
+      "description": "A single mutation-first write. expectedVersion = optimistic CAS; requestId = idempotency key.",
+      "required": ["schemaVersion", "requestId", "modelId", "actor", "op"],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": { "type": "string" },
+        "requestId": { "type": "string" },
+        "modelId": { "type": "string" },
+        "expectedVersion": { "type": "integer" },
+        "actor": { "$ref": "#/$defs/Actor" },
+        "op": {
+          "oneOf": [
+            { "$ref": "#/$defs/OpModelOpen" }, { "$ref": "#/$defs/OpDimensionRegister" },
+            { "$ref": "#/$defs/OpScaleDeclare" }, { "$ref": "#/$defs/OpRelationDeclare" },
+            { "$ref": "#/$defs/OpContractionDeclare" }, { "$ref": "#/$defs/OpMembersSync" },
+            { "$ref": "#/$defs/OpObserve" }, { "$ref": "#/$defs/OpMemberPropose" },
+            { "$ref": "#/$defs/OpEvidenceAttach" }, { "$ref": "#/$defs/OpDeprecate" }
+          ]
+        }
+      }
+    },
+    "QueryRequest": {
+      "type": "object",
+      "description": "A read/analysis. Never mutates; engine-computed. Reads are scoped slices (never the whole model).",
+      "required": ["schemaVersion", "modelId", "query"],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": { "type": "string" },
+        "modelId": { "type": "string" },
+        "query": {
+          "oneOf": [
+            { "$ref": "#/$defs/QSlice" }, { "$ref": "#/$defs/QDescribe" }, { "$ref": "#/$defs/QTrace" },
+            { "$ref": "#/$defs/QExplain" }, { "$ref": "#/$defs/QGapsNext" }, { "$ref": "#/$defs/QOrphans" },
+            { "$ref": "#/$defs/QCoverage" }, { "$ref": "#/$defs/QStale" }, { "$ref": "#/$defs/QConflicts" },
+            { "$ref": "#/$defs/QAnalyze" }, { "$ref": "#/$defs/QValidate" }, { "$ref": "#/$defs/QExport" }
+          ]
+        }
+      }
+    },
+
+    "OpModelOpen": { "type": "object", "required": ["kind"], "additionalProperties": false, "properties": { "kind": { "const": "model.open" }, "title": { "type": "string" }, "status": { "type": "string", "enum": ["draft", "active", "locked", "archived"] } } },
+    "OpDimensionRegister": { "type": "object", "required": ["kind", "dimensionId", "dimensionKind"], "additionalProperties": false, "properties": { "kind": { "const": "dimension.register" }, "dimensionId": { "type": "string" }, "dimensionKind": { "type": "string" }, "label": { "type": "string" }, "system": { "type": "string" }, "weightScale": { "type": "string" } } },
+    "OpScaleDeclare": { "type": "object", "required": ["kind", "scale"], "additionalProperties": false, "properties": { "kind": { "const": "scale.declare" }, "scale": { "type": "object", "description": "A ScaleDef (id, mode, levels[observation,description,value,range]) per the core schema." } } },
+    "OpRelationDeclare": { "type": "object", "required": ["kind", "relationId", "from", "to", "relationType", "scale"], "additionalProperties": false, "properties": { "kind": { "const": "relation.declare" }, "relationId": { "type": "string" }, "from": { "type": "string" }, "to": { "type": "string" }, "relationType": { "type": "string" }, "scale": { "type": "string" }, "coveragePolicy": { "type": "string", "enum": ["none", "every_from", "every_to", "both"] } } },
+    "OpContractionDeclare": { "type": "object", "required": ["kind", "contractionId", "chain"], "additionalProperties": false, "properties": { "kind": { "const": "contraction.declare" }, "contractionId": { "type": "string" }, "chain": { "type": "array", "items": { "type": "string" } }, "weightCombination": { "type": "string", "enum": ["product", "min", "qfd_propagate"] } } },
+    "OpMembersSync": { "type": "object", "required": ["kind", "dimensionId", "members"], "additionalProperties": false, "properties": { "kind": { "const": "members.sync" }, "dimensionId": { "type": "string" }, "members": { "type": "array", "description": "Member rosters {id,label,weightObservation|weight+sourceRef(contentHash)} projected from an authoritative source." } } },
+
+    "OpObserve": {
+      "type": "object",
+      "description": "The core write. OBSERVATION-ONLY: `observation` is a token in the relation's scale; `measuredValue` is the measured path (observed provenance + sourceRef). No raw numeric weight is accepted.",
+      "required": ["kind", "relationId", "from", "to", "observation", "provenanceClass"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "observe" },
+        "relationId": { "type": "string" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "observation": { "type": "string" },
+        "measuredValue": { "type": "number", "description": "Only with provenanceClass=observed + sourceRef; engine buckets it." },
+        "provenanceClass": { "type": "string", "enum": ["normative", "observed", "inferred"] },
+        "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+        "sourceRef": { "type": "object" },
+        "evidence": { "type": "array", "items": { "type": "object" } },
+        "rationale": { "type": "string" }
+      }
+    },
+    "OpMemberPropose": { "type": "object", "required": ["kind", "dimensionId", "memberId"], "additionalProperties": false, "properties": { "kind": { "const": "member.propose" }, "dimensionId": { "type": "string" }, "memberId": { "type": "string" }, "label": { "type": "string" }, "weightObservation": { "type": "string" }, "sourceRef": { "type": "object" } } },
+    "OpEvidenceAttach": { "type": "object", "required": ["kind", "targetRef", "evidence"], "additionalProperties": false, "properties": { "kind": { "const": "evidence.attach" }, "targetRef": { "type": "object", "description": "Identifies the observation: {relationId, from, to, observationIndex?}." }, "evidence": { "type": "object", "description": "An Evidence {sourceRef(contentHash), locator?, excerpt?}." } } },
+    "OpDeprecate": { "type": "object", "required": ["kind", "targetId", "reason"], "additionalProperties": false, "properties": { "kind": { "const": "deprecate" }, "targetId": { "type": "string" }, "supersededBy": { "type": "string" }, "reason": { "type": "string" } } },
+
+    "QSlice": { "type": "object", "required": ["kind", "scope"], "additionalProperties": false, "properties": { "kind": { "const": "slice" }, "scope": { "type": "object", "description": "{dimensionId} | {relationId} | {memberRef, radius} — scoped, token-bounded." } } },
+    "QDescribe": { "type": "object", "required": ["kind", "ref"], "additionalProperties": false, "properties": { "kind": { "const": "describe" }, "ref": { "type": "string", "description": "dimension/relation/member id; returns element + kind-capabilities + legal next ops." } } },
+    "QTrace": { "type": "object", "required": ["kind", "memberRef"], "additionalProperties": false, "properties": { "kind": { "const": "trace" }, "memberRef": { "type": "object", "description": "Lineage across contractions + resolved sourceRefs ('what it ties to')." } } },
+    "QExplain": { "type": "object", "required": ["kind", "findingRef"], "additionalProperties": false, "properties": { "kind": { "const": "explain" }, "findingRef": { "type": "string", "description": "Deterministic derivation of a finding/score (the contributor terms)." } } },
+    "QGapsNext": { "type": "object", "required": ["kind"], "additionalProperties": false, "properties": { "kind": { "const": "gaps.next" }, "relationId": { "type": "string" }, "limit": { "type": "integer" } } },
+    "QOrphans": { "type": "object", "required": ["kind", "relationId"], "additionalProperties": false, "properties": { "kind": { "const": "gaps.orphans" }, "relationId": { "type": "string" } } },
+    "QCoverage": { "type": "object", "required": ["kind", "relationId"], "additionalProperties": false, "properties": { "kind": { "const": "coverage" }, "relationId": { "type": "string" } } },
+    "QStale": { "type": "object", "required": ["kind"], "additionalProperties": false, "properties": { "kind": { "const": "stale" }, "dimensionId": { "type": "string" } } },
+    "QConflicts": { "type": "object", "required": ["kind"], "additionalProperties": false, "properties": { "kind": { "const": "conflicts" }, "relationId": { "type": "string" } } },
+    "QAnalyze": { "type": "object", "required": ["kind", "op"], "additionalProperties": false, "properties": { "kind": { "const": "analyze" }, "op": { "type": "string", "enum": ["marginalize", "contract", "findings", "priority", "compare"] }, "args": { "type": "object" } } },
+    "QValidate": { "type": "object", "required": ["kind"], "additionalProperties": false, "properties": { "kind": { "const": "validate" }, "profile": { "type": "string" } } },
+    "QExport": { "type": "object", "required": ["kind"], "additionalProperties": false, "properties": { "kind": { "const": "export" }, "scope": { "type": "object" }, "format": { "type": "string", "enum": ["model", "slice", "findings", "report"] } } }
+  }
+}

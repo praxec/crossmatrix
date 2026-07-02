@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knowledge-framework.dev/schemas/crossmatrix-config.schema.json",
+  "title": "CrossMatrixConfiguration",
+  "description": "ADR-0004 CONFIGURATION layer: the reusable, SYNCABLE cross-reference METHODOLOGY (\"how things are glued\") — scales, relation types + relation DECLARATIONS, and contraction chains. Holds NO members (Dimensions layer) and NO cells/observations (State layer). Aspects (House-of-Quality, JTBD, UX views-of-quality, ...) are INSTANCES of this one schema (ADR-0002: configure the axes, don't fork the engine), tagged by `aspect`. References the entity set by stable id+version (`dimensionSetRef`), and relation `from`/`to` are dimension ids — NEVER a $ref. Merged with a Dimensions doc + a State doc (model.open) to form the engine model.",
+  "type": "object",
+  "required": ["schemaVersion", "configId", "version", "aspect", "dimensionSetRef", "relations"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "configId": { "type": "string", "description": "Stable logical identifier for this Configuration (the sync key, with `version`). NOT a file path." },
+    "version": { "type": "string", "description": "Version of this Configuration. State binds an EXACT (configId, version)." },
+    "aspect": { "type": "string", "description": "The methodology family this configuration expresses — e.g. `hoq` | `jtbd` | `ux-views-of-quality`. Open (a new aspect is a new Configuration instance, not a new schema)." },
+    "label": { "type": "string" },
+    "dimensionSetRef": {
+      "type": "object",
+      "description": "Stable id+version reference to the Dimensions doc this Configuration's relations are declared over (NOT a $ref). The mcp resolves it from the repo library.",
+      "required": ["dimensionSetId", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "dimensionSetId": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "scales": { "type": "array", "description": "Declared observation->value tables (the ONLY place tokens become numbers). Unipolar (values >= 0).", "items": { "$ref": "#/$defs/ScaleDef" } },
+    "relations": { "type": "array", "description": "Relation DECLARATIONS (no cells): which dimensions relate, the valence (relationType), scale, and coverage policy. Cells live in the State layer keyed by `id`.", "items": { "$ref": "#/$defs/RelationDecl" } },
+    "contractions": { "type": "array", "items": { "$ref": "#/$defs/Contraction" } }
+  },
+  "$defs": {
+    "Level": {
+      "type": "object",
+      "required": ["observation", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "observation": { "type": "string" },
+        "description": { "type": "string" },
+        "value": { "type": "number", "minimum": 0 },
+        "range": { "type": "object", "additionalProperties": false, "properties": { "min": { "type": "number" }, "max": { "type": "number" } } },
+        "order": { "type": "integer" }
+      }
+    },
+    "ScaleDef": {
+      "type": "object",
+      "required": ["id", "levels"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "mode": { "type": "string", "enum": ["categorical", "measured"], "default": "categorical" },
+        "levels": { "type": "array", "items": { "$ref": "#/$defs/Level" } }
+      }
+    },
+    "RelationType": {
+      "type": "string",
+      "description": "Supporting AND opposing valences as distinct types (separation, not a signed scale).",
+      "enum": ["satisfies", "supports", "implements", "verifies", "covers", "mitigates", "derives_from", "constrains", "dependsOn", "undermines", "opposes", "blocks", "exposes"]
+    },
+    "LifecycleStatus": { "type": "string", "enum": ["active", "deprecated"], "default": "active" },
+    "RelationDecl": {
+      "type": "object",
+      "description": "A relation DECLARATION (no cells). `from`/`to` are dimension ids in the referenced Dimensions doc. `from == to` expresses intra-axis correlation (self-relation).",
+      "required": ["id", "from", "to", "relationType", "scale"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "relationType": { "$ref": "#/$defs/RelationType" },
+        "scale": { "type": "string" },
+        "coveragePolicy": { "type": "string", "enum": ["none", "every_from", "every_to", "both"], "default": "none" },
+        "status": { "$ref": "#/$defs/LifecycleStatus" },
+        "supersededBy": { "type": "string" }
+      }
+    },
+    "Contraction": {
+      "type": "object",
+      "required": ["id", "chain"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "chain": { "type": "array", "items": { "type": "string" } },
+        "weightCombination": { "type": "string", "enum": ["product", "min", "qfd_propagate"], "default": "product" },
+        "weightBySourceMembers": { "type": "boolean", "default": true }
+      }
+    }
+  }
+}

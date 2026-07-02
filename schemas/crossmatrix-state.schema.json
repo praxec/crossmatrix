@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knowledge-framework.dev/schemas/crossmatrix-state.schema.json",
+  "title": "CrossMatrixState",
+  "description": "ADR-0004 STATE layer: the cross-reference VALUES — the cells/observations filled in for ONE project. The frequently-changing analysis activity. Binds to its methodology by stable id+version (`configRef`, NOT a $ref); each cell names the relation id (from the Configuration) and the member ids (from the Dimensions doc) it ties. OBSERVATION-ONLY: the LLM emits categorical tokens (+ evidence); numbers enter only via a scale table, a measured source (provenanceClass=observed + sourceRef), or engine computation. Multi-observation cells (a SET, never a single collapsible value) preserve source disagreement.",
+  "type": "object",
+  "required": ["schemaVersion", "stateId", "configRef", "cells"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "stateId": { "type": "string" },
+    "version": { "type": "string" },
+    "configRef": {
+      "type": "object",
+      "description": "Stable id+version binding to the Configuration this State observes (NOT a $ref). The merge pins an EXACT (configId, version).",
+      "required": ["configId", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "configId": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "cells": { "type": "array", "description": "The non-empty ties. Each names its `relationId` (Configuration) + `from`/`to` member ids (Dimensions).", "items": { "$ref": "#/$defs/StateCell" } }
+  },
+  "$defs": {
+    "ProvenanceClass": { "type": "string", "enum": ["normative", "observed", "inferred"] },
+    "Confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "SourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A VERIFIABLE pointer to the authoritative artifact; `contentHash` lets the engine re-hash and detect staleness.",
+      "properties": {
+        "system": { "type": "string" },
+        "sourceType": { "type": "string" },
+        "sourceRef": { "type": "string" },
+        "locator": { "type": "string" },
+        "contentHash": { "type": "string" },
+        "version": { "type": "string" },
+        "excerpt": { "type": "string" }
+      }
+    },
+    "Evidence": {
+      "type": "object",
+      "required": ["sourceRef"],
+      "additionalProperties": false,
+      "properties": {
+        "sourceRef": { "$ref": "#/$defs/SourceRef" },
+        "locator": { "type": "string" },
+        "excerpt": { "type": "string" }
+      }
+    },
+    "Observation": {
+      "type": "object",
+      "description": "ONE source-stamped observation on a cell. The LLM emits `observation`; `measuredValue` is a measured-source path (observed provenance only, bucketed by code).",
+      "required": ["observation"],
+      "additionalProperties": false,
+      "properties": {
+        "observation": { "type": "string" },
+        "measuredValue": { "type": "number" },
+        "provenanceClass": { "$ref": "#/$defs/ProvenanceClass" },
+        "confidence": { "$ref": "#/$defs/Confidence" },
+        "sourceRef": { "$ref": "#/$defs/SourceRef" },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/Evidence" }, "description": "Required non-empty when provenanceClass=inferred." },
+        "rationale": { "type": "string" }
+      }
+    },
+    "StateCell": {
+      "type": "object",
+      "description": "A non-empty tie holding a SET of source-stamped observations, tagged with the relation + member ids it belongs to (the cells the engine schema nests inside a relation, here keyed by `relationId`).",
+      "required": ["relationId", "from", "to", "observations"],
+      "additionalProperties": false,
+      "properties": {
+        "relationId": { "type": "string", "description": "Relation id declared in the bound Configuration." },
+        "from": { "type": "string", "description": "Member id in the relation's `from` dimension." },
+        "to": { "type": "string", "description": "Member id in the relation's `to` dimension." },
+        "observations": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Observation" } }
+      }
+    }
+  }
+}

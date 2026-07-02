@@ -1,0 +1,96 @@
+{
+  "schemaVersion": "0.2.0",
+  "dimensionSetId": "dimset_qfd_fmeca",
+  "version": "1.0.0",
+  "dimensions": [
+    {
+      "id": "dim_req",
+      "label": "Customer requirements",
+      "kind": "customer_requirement",
+      "order": 0,
+      "weightSemantics": "stakeholder_importance",
+      "weightScale": "importance",
+      "members": [
+        {
+          "id": "req_fast_checkout",
+          "label": "Fast checkout",
+          "weightObservation": "high"
+        },
+        {
+          "id": "req_secure_payment",
+          "label": "Secure payment",
+          "weightObservation": "high"
+        },
+        {
+          "id": "req_easy_returns",
+          "label": "Easy returns",
+          "weightObservation": "medium"
+        }
+      ]
+    },
+    {
+      "id": "dim_char",
+      "label": "Engineering characteristics",
+      "kind": "engineering_characteristic",
+      "order": 1,
+      "members": [
+        {
+          "id": "char_response_latency",
+          "label": "Response latency"
+        },
+        {
+          "id": "char_encryption",
+          "label": "Encryption"
+        },
+        {
+          "id": "char_idempotent_api",
+          "label": "Idempotent payment API"
+        },
+        {
+          "id": "char_return_workflow",
+          "label": "Self-serve return workflow"
+        }
+      ]
+    },
+    {
+      "id": "dim_fail",
+      "label": "Failure modes (FMECA)",
+      "kind": "failure_mode",
+      "order": 2,
+      "system": "fmeca",
+      "weightSemantics": "fmeca_criticality",
+      "members": [
+        {
+          "id": "fail_double_charge",
+          "label": "Duplicate payment charge",
+          "weight": 9,
+          "sourceRef": {
+            "system": "fmeca",
+            "sourceRef": "FM-014",
+            "contentHash": "xxh3:9a3f"
+          }
+        },
+        {
+          "id": "fail_latency_spike",
+          "label": "Checkout latency spike",
+          "weight": 3,
+          "sourceRef": {
+            "system": "fmeca",
+            "sourceRef": "FM-031",
+            "contentHash": "xxh3:2b80"
+          }
+        },
+        {
+          "id": "fail_data_breach",
+          "label": "Cardholder data breach",
+          "weight": 9,
+          "sourceRef": {
+            "system": "fmeca",
+            "sourceRef": "FM-002",
+            "contentHash": "xxh3:4e11"
+          }
+        }
+      ]
+    }
+  ]
+}

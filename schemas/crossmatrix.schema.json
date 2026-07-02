@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knowledge-framework.dev/schemas/crossmatrix.schema.json",
+  "title": "CrossMatrixModel",
+  "description": "A specialized, configurable, SPARSE N-dimensional weighted cross-reference model (generalized House of Quality). OBSERVATION-ONLY (no LLM-authored numbers): the LLM emits only categorical observation tokens from a closed, declared vocabulary (+ evidence); numbers enter only via (a) a declared observation->value table (`scales`), (b) measurement from an authoritative source (provenanceClass=observed, carried as `measuredValue` + sourceRef, bucketed by CODE), or (c) engine computation. VALENCE BY SEPARATION (TRIZ): support and opposition are SEPARATE unipolar relations (relationType e.g. supports vs undermines), NOT a signed/bipolar scale — so a strong-for and a strong-against never cancel; the engine reports net AND tension. MULTI-OBSERVATION CELLS (poka-yoke): a Cell holds a SET of source-stamped observations (never a single collapsible value) so disagreement is preserved; the engine computes a consensus for math + a tension/conflict finding. N-DIMENSIONALITY is open (arbitrary `dimensions` + pairwise `relations` + `contractions`); adding a cross-dimension is additive. FMECA is a DIMENSION (criticality imported with a deterministic sourceRef). Operations FIXED (contract/marginalize/slice + driver queries); priority(AHP)/dense-tensors deferred; minimal sensitivity is NOT deferred (findings carry ranked `contributors`). Roofs + Hyperedges REMOVED (architecture-validity): intra-axis correlation = a self-relation (from==to); irreducible N-way + dense tensors are out of scope. Write API = a mutation-first design.",
+  "type": "object",
+  "required": ["schemaVersion", "modelId", "dimensions", "relations"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "modelId": { "type": "string" },
+    "scales": { "type": "array", "description": "Declared observation->value tables (the ONLY place tokens become numbers). Unipolar (values >= 0); valence is a separate relation, not a sign.", "items": { "$ref": "#/$defs/ScaleDef" } },
+    "dimensions": { "type": "array", "items": { "$ref": "#/$defs/Dimension" } },
+    "relations": { "type": "array", "items": { "$ref": "#/$defs/Relation" } },
+    "contractions": { "type": "array", "items": { "$ref": "#/$defs/Contraction" } },
+    "findings": { "type": "array", "description": "READ-ONLY engine output.", "items": { "$ref": "#/$defs/Finding" } }
+  },
+  "$defs": {
+    "Level": {
+      "type": "object",
+      "description": "One rung of a scale: the categorical observation token an LLM may emit, the (UNIPOLAR, >=0) number CODE assigns, and a rubric description. For a `measured` scale, `range` buckets a measured value to this level deterministically.",
+      "required": ["observation", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "observation": { "type": "string", "description": "Closed-vocabulary token (e.g. none|weak|moderate|strong)." },
+        "description": { "type": "string", "description": "Semantic RUBRIC ANCHOR shown to the LLM (it chooses from token+description, never the value). Strongly recommended on every level." },
+        "value": { "type": "number", "minimum": 0, "description": "Deterministic numeric the engine assigns. UNIPOLAR (>=0); opposition is a separate relation, not a negative value. LLM never sees/sets this." },
+        "range": { "type": "object", "additionalProperties": false, "properties": { "min": { "type": "number" }, "max": { "type": "number" } }, "description": "For a `measured` scale: the numeric interval a measuredValue must fall in to bucket to this level (engine-applied)." },
+        "order": { "type": "integer" }
+      }
+    },
+    "ScaleDef": {
+      "type": "object",
+      "required": ["id", "levels"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "mode": { "type": "string", "enum": ["categorical", "measured"], "default": "categorical", "description": "categorical = LLM picks a token; measured = a deterministic source value (measuredValue) is bucketed into a level by its `range` (LLM still authors no number)." },
+        "levels": { "type": "array", "items": { "$ref": "#/$defs/Level" }, "description": "Unipolar observation->value table. Engine rejects unknown tokens." }
+      }
+    },
+    "ProvenanceClass": { "type": "string", "enum": ["normative", "observed", "inferred"] },
+    "Confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "DimensionKind": {
+      "type": "string",
+      "description": "A TYPED DISPATCH discriminator: the engine binds deterministic kind-capabilities to it (weight-source policy, valid relations/scales, sibling-core routing, default profile/findings) via a DECLARED kind-capability profile. It affords/validates/routes; it must NOT import domain ALGORITHMS (those stay federated in the owning system).",
+      "enum": ["customer_requirement", "engineering_characteristic", "stakeholder_priority", "option", "criterion", "constraint", "implementation_asset", "test_artifact", "business_metric", "failure_mode", "jtbd_step", "context", "code_element"]
+    },
+    "RelationType": {
+      "type": "string",
+      "description": "Includes BOTH supporting and OPPOSING valences as distinct types (separation, not a signed scale). `dependsOn` (typically a self-relation, from==to) carries a dependency matrix; its cyclic analysis (SCC/layering) routes to the graph core.",
+      "enum": ["satisfies", "supports", "implements", "verifies", "covers", "mitigates", "derives_from", "constrains", "dependsOn", "undermines", "opposes", "blocks", "exposes"]
+    },
+    "SourceRef": {
+      "type": "object", "additionalProperties": false,
+      "description": "A VERIFIABLE pointer to the authoritative artifact (federation). The LLM can re-open `sourceRef`(+`locator`) to verify; `contentHash` (fast, non-crypto) lets the engine re-hash and detect staleness. `system` present => a deterministic import (a numeric weight/measuredValue is permitted).",
+      "properties": {
+        "system": { "type": "string", "description": "the federated owner system, e.g. fmeca | telemetry | research" },
+        "sourceType": { "type": "string" },
+        "sourceRef": { "type": "string", "description": "id/path the LLM can re-open (e.g. a file path)." },
+        "locator": { "type": "string", "description": "Sub-source location (line range, node id, selector)." },
+        "contentHash": { "type": "string", "description": "FAST NON-cryptographic identity+change hash at observation time (e.g. xxh3/fnv). Re-hash later -> staleness. NOT for security." },
+        "version": { "type": "string" },
+        "excerpt": { "type": "string" }
+      }
+    },
+    "Evidence": {
+      "type": "object", "required": ["sourceRef"], "additionalProperties": false,
+      "description": "A verifiable grounding the LLM can re-open and the engine can re-hash.",
+      "properties": {
+        "sourceRef": { "$ref": "#/$defs/SourceRef" },
+        "locator": { "type": "string" },
+        "excerpt": { "type": "string" }
+      }
+    },
+    "Observation": {
+      "type": "object",
+      "description": "ONE source-stamped observation on a cell. The LLM emits the `observation` token; `measuredValue` is the measured-source path (observed provenance only, bucketed by code). Cells hold a SET of these so disagreement is preserved.",
+      "required": ["observation"],
+      "additionalProperties": false,
+      "properties": {
+        "observation": { "type": "string", "description": "Categorical token in the relation's scale (engine resolves to a value; rejects unknown tokens)." },
+        "measuredValue": { "type": "number", "description": "MEASURED PATH: a value from a deterministic source, permitted ONLY with provenanceClass=observed + a sourceRef. Engine buckets it to a token via the scale's level `range`s. LLM never sets this." },
+        "provenanceClass": { "$ref": "#/$defs/ProvenanceClass" },
+        "confidence": { "$ref": "#/$defs/Confidence" },
+        "sourceRef": { "$ref": "#/$defs/SourceRef" },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/Evidence" }, "description": "Required non-empty when provenanceClass=inferred." },
+        "rationale": { "type": "string" }
+      }
+    },
+    "LifecycleStatus": { "type": "string", "enum": ["active", "deprecated"], "default": "active", "description": "Non-destructive lifecycle for auditable deprecation (append-only); deprecated elements are excluded from analyses." },
+    "Member": {
+      "type": "object", "required": ["id"], "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "weightObservation": { "type": "string", "description": "LLM PATH: a categorical importance/criticality token, resolved by the dimension's weightScale. Weighted analyses (marginalize/findings) REQUIRE a resolvable member weight (validated as a precondition)." },
+        "weight": { "type": "number", "description": "DETERMINISTIC-IMPORT PATH ONLY: permitted iff sourceRef.system is set (e.g. fmeca criticality). LLM may not set this." },
+        "sourceRef": { "$ref": "#/$defs/SourceRef" },
+        "status": { "$ref": "#/$defs/LifecycleStatus" },
+        "supersededBy": { "type": "string" },
+        "attributes": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "Dimension": {
+      "type": "object", "required": ["id", "order", "members"], "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "kind": { "$ref": "#/$defs/DimensionKind" },
+        "order": { "type": "integer", "minimum": 0 },
+        "system": { "type": "string" },
+        "weightSemantics": { "type": "string" },
+        "weightScale": { "type": "string" },
+        "members": { "type": "array", "items": { "$ref": "#/$defs/Member" } }
+      }
+    },
+    "Cell": {
+      "type": "object",
+      "description": "A NON-EMPTY tie holding a SET of source-stamped observations (poka-yoke: no single-value slot to collapse). Engine computes a consensus value for math + a tension/conflict finding when observations diverge.",
+      "required": ["from", "to", "observations"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "observations": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Observation" } }
+      }
+    },
+    "Relation": {
+      "type": "object",
+      "description": "A sparse pairwise relation between two dimensions, of one VALENCE (relationType — supporting OR opposing). Holds only non-empty cells. `from == to` expresses INTRA-axis correlation (a self-relation) — the former 'roof', now subsumed with no dedicated construct.",
+      "required": ["id", "from", "to", "relationType", "scale", "cells"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "relationType": { "$ref": "#/$defs/RelationType" },
+        "scale": { "type": "string", "description": "Scale id (preset or declared in `scales`)." },
+        "coveragePolicy": { "type": "string", "enum": ["none", "every_from", "every_to", "both"], "default": "none", "description": "Turns coverage from a report into a gate: which side's members MUST have a cell, else an orphan is a violation." },
+        "status": { "$ref": "#/$defs/LifecycleStatus" },
+        "supersededBy": { "type": "string" },
+        "cells": { "type": "array", "items": { "$ref": "#/$defs/Cell" } }
+      }
+    },
+    "Contraction": {
+      "type": "object",
+      "description": "A declared multilinear cascade over a chain of relations (each `to` == next `from`; acyclic + scale-compatible, engine-validated). Contract a SINGLE valence at a time (support chain vs oppose chain), then compare — signs never mix.",
+      "required": ["id", "chain"], "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "chain": { "type": "array", "items": { "type": "string" } },
+        "weightCombination": { "type": "string", "enum": ["product", "min", "qfd_propagate"], "default": "product" },
+        "weightBySourceMembers": { "type": "boolean", "default": true }
+      }
+    },
+    "Finding": {
+      "type": "object",
+      "description": "READ-ONLY engine output. Derived findings carry `contributors` (ranked top drivers = the minimal sensitivity that makes 'what needs fixing' actionable) + a lineage `path` with resolvable sourceRefs.",
+      "required": ["kind", "severity"], "additionalProperties": true,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["orphan", "uncovered_target", "weighted_priority", "critical_exposure", "tension", "conflict", "weak_evidence", "stale_reference", "illegal_cell", "duplicate_semantics"]
+        },
+        "severity": { "type": "string", "enum": ["info", "warn", "block"] },
+        "relation": { "type": "string" },
+        "members": { "type": "array", "items": { "type": "string" } },
+        "path": { "type": "array", "items": { "type": "string" }, "description": "Lineage of members traversed (resolvable sourceRefs)." },
+        "contributors": { "type": "array", "items": { "type": "string" }, "description": "Top contributing cells/members ranked by their share of the score (minimal sensitivity)." },
+        "net": { "type": "number", "description": "Engine-computed: support minus oppose (relative rank, not a probability)." },
+        "tension": { "type": "number", "description": "Engine-computed co-occurrence of support AND opposition (what bipolar net-zero would have hidden)." },
+        "confidence": { "$ref": "#/$defs/Confidence" },
+        "explanation": { "type": "string" }
+      }
+    }
+  }
+}

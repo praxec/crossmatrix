@@ -1,0 +1,160 @@
+{
+  "schemaVersion": "0.2.0",
+  "configId": "cfg_hoq_qfd_fmeca",
+  "version": "1.0.0",
+  "aspect": "hoq",
+  "dimensionSetRef": {
+    "dimensionSetId": "dimset_qfd_fmeca",
+    "version": "1.0.0"
+  },
+  "scales": [
+    {
+      "id": "qfd",
+      "label": "QFD relationship strength (unipolar; valence is the relationType)",
+      "mode": "categorical",
+      "levels": [
+        {
+          "observation": "none",
+          "description": "No meaningful relationship.",
+          "value": 0,
+          "order": 0
+        },
+        {
+          "observation": "weak",
+          "description": "Minor/indirect effect.",
+          "value": 1,
+          "order": 1
+        },
+        {
+          "observation": "moderate",
+          "description": "Partial; contributes but not the primary mechanism.",
+          "value": 3,
+          "order": 2
+        },
+        {
+          "observation": "strong",
+          "description": "Primary mechanism; direct and substantial.",
+          "value": 9,
+          "order": 3
+        }
+      ]
+    },
+    {
+      "id": "importance",
+      "label": "Stakeholder importance",
+      "mode": "categorical",
+      "levels": [
+        {
+          "observation": "low",
+          "description": "Nice-to-have; little consequence if unmet.",
+          "value": 1,
+          "order": 0
+        },
+        {
+          "observation": "medium",
+          "description": "Valued; noticeable consequence if unmet.",
+          "value": 3,
+          "order": 1
+        },
+        {
+          "observation": "high",
+          "description": "Critical; significant consequence if unmet.",
+          "value": 9,
+          "order": 2
+        }
+      ]
+    },
+    {
+      "id": "latency_measured",
+      "label": "Latency exposure (MEASURED \u2014 code buckets a p95 ms value)",
+      "mode": "measured",
+      "levels": [
+        {
+          "observation": "weak",
+          "description": "p95 < 50ms \u2014 negligible.",
+          "value": 1,
+          "range": {
+            "min": 0,
+            "max": 50
+          },
+          "order": 0
+        },
+        {
+          "observation": "moderate",
+          "description": "50ms <= p95 < 200ms.",
+          "value": 3,
+          "range": {
+            "min": 50,
+            "max": 200
+          },
+          "order": 1
+        },
+        {
+          "observation": "strong",
+          "description": "p95 >= 200ms \u2014 severe.",
+          "value": 9,
+          "range": {
+            "min": 200
+          },
+          "order": 2
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "id": "rel_req_char",
+      "from": "dim_req",
+      "to": "dim_char",
+      "relationType": "satisfies",
+      "scale": "qfd"
+    },
+    {
+      "id": "rel_req_undermined_by_char",
+      "from": "dim_req",
+      "to": "dim_char",
+      "relationType": "undermines",
+      "scale": "qfd"
+    },
+    {
+      "id": "rel_char_exposes_fail",
+      "from": "dim_char",
+      "to": "dim_fail",
+      "relationType": "exposes",
+      "scale": "qfd"
+    },
+    {
+      "id": "rel_latency_exposes_fail",
+      "from": "dim_char",
+      "to": "dim_fail",
+      "relationType": "exposes",
+      "scale": "latency_measured"
+    },
+    {
+      "id": "rel_char_mitigates_fail",
+      "from": "dim_char",
+      "to": "dim_fail",
+      "relationType": "mitigates",
+      "scale": "qfd"
+    },
+    {
+      "id": "rel_char_internal_conflict",
+      "from": "dim_char",
+      "to": "dim_char",
+      "relationType": "opposes",
+      "scale": "qfd"
+    }
+  ],
+  "contractions": [
+    {
+      "id": "ctr_req_failure_exposure",
+      "label": "Requirement -> failure exposure (support chain: rel_req_char  contracted with  rel_char_exposes_fail)",
+      "chain": [
+        "rel_req_char",
+        "rel_char_exposes_fail"
+      ],
+      "weightCombination": "product",
+      "weightBySourceMembers": true
+    }
+  ]
+}

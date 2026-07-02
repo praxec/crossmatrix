@@ -1,0 +1,162 @@
+{
+  "schemaVersion": "0.2.0",
+  "stateId": "state_demo",
+  "version": "1.0.0",
+  "configRef": {
+    "configId": "cfg_hoq_qfd_fmeca",
+    "version": "1.0.0"
+  },
+  "cells": [
+    {
+      "relationId": "rel_req_char",
+      "from": "req_fast_checkout",
+      "to": "char_response_latency",
+      "observations": [
+        {
+          "observation": "strong",
+          "provenanceClass": "normative"
+        }
+      ]
+    },
+    {
+      "relationId": "rel_req_char",
+      "from": "req_secure_payment",
+      "to": "char_encryption",
+      "observations": [
+        {
+          "observation": "strong",
+          "provenanceClass": "observed",
+          "confidence": "high",
+          "sourceRef": {
+            "system": "codebase",
+            "sourceRef": "src/payment.ts",
+            "contentHash": "xxh3:11aa"
+          }
+        },
+        {
+          "observation": "moderate",
+          "provenanceClass": "inferred",
+          "confidence": "medium",
+          "evidence": [
+            {
+              "sourceRef": {
+                "system": "research",
+                "sourceRef": "study/2026q1.md",
+                "contentHash": "xxh3:22bb"
+              },
+              "excerpt": "Users conflate encryption with 2FA."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relationId": "rel_req_char",
+      "from": "req_secure_payment",
+      "to": "char_idempotent_api",
+      "observations": [
+        {
+          "observation": "moderate",
+          "provenanceClass": "normative"
+        }
+      ]
+    },
+    {
+      "relationId": "rel_req_char",
+      "from": "req_easy_returns",
+      "to": "char_return_workflow",
+      "observations": [
+        {
+          "observation": "strong",
+          "provenanceClass": "normative"
+        }
+      ]
+    },
+    {
+      "relationId": "rel_req_undermined_by_char",
+      "from": "req_fast_checkout",
+      "to": "char_encryption",
+      "observations": [
+        {
+          "observation": "moderate",
+          "provenanceClass": "observed",
+          "rationale": "Crypto overhead works AGAINST fast checkout (separate valence, not a negative cell).",
+          "evidence": [
+            {
+              "sourceRef": {
+                "system": "codebase",
+                "sourceRef": "bench/latency.md",
+                "locator": "L20-28",
+                "contentHash": "xxh3:7c1d"
+              },
+              "excerpt": "TLS adds ~40ms p95."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relationId": "rel_char_exposes_fail",
+      "from": "char_idempotent_api",
+      "to": "fail_double_charge",
+      "observations": [
+        {
+          "observation": "strong",
+          "provenanceClass": "observed"
+        }
+      ]
+    },
+    {
+      "relationId": "rel_char_exposes_fail",
+      "from": "char_encryption",
+      "to": "fail_data_breach",
+      "observations": [
+        {
+          "observation": "strong",
+          "provenanceClass": "observed"
+        }
+      ]
+    },
+    {
+      "relationId": "rel_latency_exposes_fail",
+      "from": "char_response_latency",
+      "to": "fail_latency_spike",
+      "observations": [
+        {
+          "observation": "weak",
+          "measuredValue": 42,
+          "provenanceClass": "observed",
+          "sourceRef": {
+            "system": "telemetry",
+            "sourceRef": "grafana/checkout_p95",
+            "contentHash": "xxh3:33cc"
+          }
+        }
+      ]
+    },
+    {
+      "relationId": "rel_char_mitigates_fail",
+      "from": "char_encryption",
+      "to": "fail_data_breach",
+      "observations": [
+        {
+          "observation": "strong",
+          "provenanceClass": "normative",
+          "rationale": "AES-256 + TLS mitigates breach."
+        }
+      ]
+    },
+    {
+      "relationId": "rel_char_internal_conflict",
+      "from": "char_encryption",
+      "to": "char_response_latency",
+      "observations": [
+        {
+          "observation": "moderate",
+          "provenanceClass": "observed",
+          "rationale": "Intra-axis trade-off expressed as a SELF-relation (former 'roof'): crypto overhead increases latency."
+        }
+      ]
+    }
+  ]
+}

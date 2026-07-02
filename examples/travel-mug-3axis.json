@@ -1,0 +1,94 @@
+{
+  "schemaVersion": "0.2.0",
+  "modelId": "travel-mug-qfd-fmeca",
+  "scales": [
+    {
+      "id": "qfd",
+      "label": "QFD relationship strength (unipolar; valence is the relationType)",
+      "mode": "categorical",
+      "levels": [
+        { "observation": "none", "description": "No meaningful relationship.", "value": 0, "order": 0 },
+        { "observation": "weak", "description": "Minor/indirect effect.", "value": 1, "order": 1 },
+        { "observation": "moderate", "description": "Partial; contributes but not the primary mechanism.", "value": 3, "order": 2 },
+        { "observation": "strong", "description": "Primary mechanism; direct and substantial.", "value": 9, "order": 3 }
+      ]
+    },
+    {
+      "id": "importance",
+      "label": "Customer importance",
+      "mode": "categorical",
+      "levels": [
+        { "observation": "low", "description": "Nice-to-have; little consequence if unmet.", "value": 1, "order": 0 },
+        { "observation": "medium", "description": "Valued; noticeable consequence if unmet.", "value": 3, "order": 1 },
+        { "observation": "high", "description": "Critical; significant consequence if unmet.", "value": 9, "order": 2 }
+      ]
+    }
+  ],
+  "dimensions": [
+    {
+      "id": "dim_need", "label": "Customer needs", "kind": "customer_requirement", "order": 0,
+      "weightSemantics": "customer_importance", "weightScale": "importance",
+      "members": [
+        { "id": "need_keeps_hot", "label": "Keeps drink hot for hours", "weightObservation": "high" },
+        { "id": "need_no_spill", "label": "Does not spill in a bag", "weightObservation": "high" },
+        { "id": "need_easy_clean", "label": "Easy to clean", "weightObservation": "medium" }
+      ]
+    },
+    {
+      "id": "dim_part", "label": "Engineering characteristics", "kind": "engineering_characteristic", "order": 1,
+      "members": [
+        { "id": "part_vacuum_wall", "label": "Double-wall vacuum insulation" },
+        { "id": "part_lid_seal", "label": "Silicone lid seal" },
+        { "id": "part_wide_mouth", "label": "Wide mouth opening" }
+      ]
+    },
+    {
+      "id": "dim_fail", "label": "Failure modes (FMECA)", "kind": "failure_mode", "order": 2,
+      "system": "fmeca", "weightSemantics": "fmeca_criticality",
+      "members": [
+        { "id": "fail_burn", "label": "Burn injury from hot exterior", "weight": 9, "sourceRef": { "system": "fmeca", "sourceRef": "FM-101", "contentHash": "xxh3:a1b2" } },
+        { "id": "fail_leak", "label": "Leak or spill into bag", "weight": 9, "sourceRef": { "system": "fmeca", "sourceRef": "FM-102", "contentHash": "xxh3:c3d4" } },
+        { "id": "fail_mold", "label": "Mold from incomplete cleaning", "weight": 3, "sourceRef": { "system": "fmeca", "sourceRef": "FM-103", "contentHash": "xxh3:e5f6" } }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "id": "rel_need_part", "from": "dim_need", "to": "dim_part", "relationType": "satisfies", "scale": "qfd",
+      "cells": [
+        { "from": "need_keeps_hot", "to": "part_vacuum_wall", "observations": [ { "observation": "strong", "provenanceClass": "normative" } ] },
+        { "from": "need_no_spill", "to": "part_lid_seal", "observations": [ { "observation": "strong", "provenanceClass": "normative" } ] },
+        { "from": "need_easy_clean", "to": "part_wide_mouth", "observations": [ { "observation": "strong", "provenanceClass": "normative" } ] }
+      ]
+    },
+    {
+      "id": "rel_part_exposes_fail", "from": "dim_part", "to": "dim_fail", "relationType": "exposes", "scale": "qfd",
+      "cells": [
+        { "from": "part_vacuum_wall", "to": "fail_burn", "observations": [ { "observation": "weak", "provenanceClass": "observed", "rationale": "Even double-wall designs leave a hot rim near the lid." } ] },
+        { "from": "part_wide_mouth", "to": "fail_leak", "observations": [ { "observation": "strong", "provenanceClass": "observed", "rationale": "A wider mouth is harder to seal reliably." } ] }
+      ]
+    },
+    {
+      "id": "rel_part_mitigates_fail", "from": "dim_part", "to": "dim_fail", "relationType": "mitigates", "scale": "qfd",
+      "cells": [
+        { "from": "part_lid_seal", "to": "fail_leak", "observations": [ { "observation": "strong", "provenanceClass": "normative", "rationale": "A compliant silicone seal mitigates leaks." } ] },
+        { "from": "part_wide_mouth", "to": "fail_mold", "observations": [ { "observation": "strong", "provenanceClass": "normative", "rationale": "A wide mouth lets a brush reach all surfaces, mitigating mold." } ] }
+      ]
+    },
+    {
+      "id": "rel_part_internal_conflict", "from": "dim_part", "to": "dim_part", "relationType": "opposes", "scale": "qfd",
+      "cells": [
+        { "from": "part_wide_mouth", "to": "part_lid_seal", "observations": [ { "observation": "moderate", "provenanceClass": "observed", "rationale": "Intra-axis trade-off as a SELF-relation: a wider mouth makes a reliable seal harder to achieve." } ] }
+      ]
+    }
+  ],
+  "contractions": [
+    {
+      "id": "ctr_need_failure_exposure",
+      "label": "Need -> failure exposure (support chain: rel_need_part  contracted with  rel_part_exposes_fail)",
+      "chain": ["rel_need_part", "rel_part_exposes_fail"],
+      "weightCombination": "product",
+      "weightBySourceMembers": true
+    }
+  ]
+}
