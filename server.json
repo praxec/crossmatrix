@@ -1,0 +1,15 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "dev.praxec/crossmatrix",
+  "description": "Multidimensional House of Quality (QFD) MCP server — cross-dimensional relationship matrices.",
+  "version": "0.1.0",
+  "repository": { "url": "https://github.com/praxec/crossmatrix", "source": "github" },
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/praxec/crossmatrix",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}
