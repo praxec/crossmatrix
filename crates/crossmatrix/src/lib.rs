@@ -109,16 +109,16 @@ impl Model {
             for pair in ctr.chain.windows(2) {
                 let first = rel_by_id.get(&pair[0]);
                 let second = rel_by_id.get(&pair[1]);
-                if let (Some(a), Some(b)) = (first, second) {
-                    if a.to != b.from {
-                        return Err(ValidationError::ScaleMismatch {
-                            chain_id: ctr.id.clone(),
-                            detail: format!(
-                                "relation '{}' to='{}' but next relation '{}' from='{}' — shared axis must match",
-                                a.id, a.to, b.id, b.from
-                            ),
-                        });
-                    }
+                if let (Some(a), Some(b)) = (first, second)
+                    && a.to != b.from
+                {
+                    return Err(ValidationError::ScaleMismatch {
+                        chain_id: ctr.id.clone(),
+                        detail: format!(
+                            "relation '{}' to='{}' but next relation '{}' from='{}' — shared axis must match",
+                            a.id, a.to, b.id, b.from
+                        ),
+                    });
                 }
             }
         }

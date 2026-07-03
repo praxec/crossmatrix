@@ -61,10 +61,10 @@ impl S {
         match name {
             "crossmatrix.command" => {
                 // Idempotency: if requestId was already processed, replay.
-                if let Some(request_id) = request.get("requestId").and_then(|v| v.as_str()) {
-                    if let Some(cached) = self.request_cache.lock().unwrap().get(request_id) {
-                        return cached.clone();
-                    }
+                if let Some(request_id) = request.get("requestId").and_then(|v| v.as_str())
+                    && let Some(cached) = self.request_cache.lock().unwrap().get(request_id)
+                {
+                    return cached.clone();
                 }
 
                 let kind = request
