@@ -38,7 +38,9 @@ pub enum ValidationError {
         relation_id: String,
         tokens: Vec<String>,
     },
-    #[error("inferred observation in relation '{relation_id}' cell {from}->{to} must carry at least one evidence item")]
+    #[error(
+        "inferred observation in relation '{relation_id}' cell {from}->{to} must carry at least one evidence item"
+    )]
     UnevidencedInferred {
         relation_id: String,
         from: String,
@@ -48,7 +50,9 @@ pub enum ValidationError {
     CyclicContraction { chain_id: String },
     #[error("scale mismatch in contraction chain '{chain_id}': {detail}")]
     ScaleMismatch { chain_id: String, detail: String },
-    #[error("unweighted member(s) on axis of relation '{relation_id}' prevent weighted analysis: {members:?}")]
+    #[error(
+        "unweighted member(s) on axis of relation '{relation_id}' prevent weighted analysis: {members:?}"
+    )]
     UnweightedMemberForWeightedAnalysis {
         relation_id: String,
         members: Vec<String>,
