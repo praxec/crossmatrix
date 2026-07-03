@@ -10,7 +10,7 @@ use rmcp::model::*;
 use rmcp::service::RequestContext;
 use rmcp::transport::stdio;
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 type McpError = rmcp::ErrorData;
 
@@ -61,10 +61,10 @@ impl S {
         match name {
             "crossmatrix.command" => {
                 // Idempotency: if requestId was already processed, replay.
-                if let Some(request_id) = request.get("requestId").and_then(|v| v.as_str()) {
-                    if let Some(cached) = self.request_cache.lock().unwrap().get(request_id) {
-                        return cached.clone();
-                    }
+                if let Some(request_id) = request.get("requestId").and_then(|v| v.as_str())
+                    && let Some(cached) = self.request_cache.lock().unwrap().get(request_id)
+                {
+                    return cached.clone();
                 }
 
                 let kind = request
