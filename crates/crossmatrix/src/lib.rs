@@ -3,9 +3,11 @@
 //! Schema via typify (single source of truth:
 //! `knowledge-framework/schemas/crossmatrix.schema.json`).
 //!
-//! SCAFFOLD: `findings` and driver queries are stubs to be implemented (see
-//! ADR 0002/0003 in `knowledge-framework/adr/`). `marginalize` and `contract`
-//! are implemented.
+//! Implemented operations: `marginalize`, `contract`, `findings`
+//! (stale-reference), and the traceability queries (`describe`, `slice`,
+//! `trace`, `coverage`, `orphans`, `gaps_next`). Valence/tension (conflict)
+//! analysis is still to be implemented (see ADR 0002/0003 in
+//! `knowledge-framework/adr/`).
 //!
 //! Invariants the full loader must enforce (ADR 0002): observation-only (no
 //! LLM numbers — already structural via the schema), valence-by-separation,
@@ -503,6 +505,227 @@ impl Model {
         findings
     }
 
+    // ── traceability queries (Vee / QFD House-of-Quality) ──
+
+    /// The dimension owning a member id, if any.
+    pub fn dimension_of(&self, member_id: &str) -> Option<&str> {
+        self.members_by_dim
+            .iter()
+            .find_map(|(dim, members)| members.contains(member_id).then_some(dim.as_str()))
+    }
+
+    /// The core traceability walk: every member related to `member_id` across
+    /// all (non-deprecated) relations, one hop per matching cell. Direction is
+    /// relative to the traced member: `Out` = it sits on the relation's `from`
+    /// axis, `In` = on its `to` axis.
+    pub fn trace(&self, member_id: &str) -> Vec<TraceHop> {
+        let mut hops = Vec::new();
+        for rel in self.doc.relations.iter().filter(|r| relation_active(r)) {
+            for cell in &rel.cells {
+                let observations: Vec<String> = cell
+                    .observations
+                    .iter()
+                    .map(|o| o.observation.clone())
+                    .collect();
+                if cell.from == member_id {
+                    hops.push(TraceHop {
+                        relation: rel.id.clone(),
+                        relation_type: rel.relation_type.to_string(),
+                        direction: TraceDirection::Out,
+                        member: cell.to.clone(),
+                        dimension: rel.to.clone(),
+                        observations: observations.clone(),
+                    });
+                }
+                if cell.to == member_id {
+                    hops.push(TraceHop {
+                        relation: rel.id.clone(),
+                        relation_type: rel.relation_type.to_string(),
+                        direction: TraceDirection::In,
+                        member: cell.from.clone(),
+                        dimension: rel.from.clone(),
+                        observations,
+                    });
+                }
+            }
+        }
+        hops.sort_by(|a, b| (&a.relation, &a.member).cmp(&(&b.relation, &b.member)));
+        hops
+    }
+
+    /// Per-relation, per-axis coverage: which members of the axis dimension
+    /// have ≥1 cell on that relation, and which don't. `required` reflects the
+    /// relation's `coveragePolicy` (the gate that turns an uncovered member
+    /// from a report into a violation). Deprecated members/relations are
+    /// excluded from analyses (LifecycleStatus semantics).
+    pub fn coverage(&self) -> Vec<AxisCoverage> {
+        let mut out = Vec::new();
+        for rel in self.doc.relations.iter().filter(|r| relation_active(r)) {
+            let policy = rel.coverage_policy;
+            let from_required = matches!(
+                policy,
+                raw::RelationCoveragePolicy::EveryFrom | raw::RelationCoveragePolicy::Both
+            );
+            let to_required = matches!(
+                policy,
+                raw::RelationCoveragePolicy::EveryTo | raw::RelationCoveragePolicy::Both
+            );
+            let from_used: HashSet<&str> = rel.cells.iter().map(|c| c.from.as_str()).collect();
+            let to_used: HashSet<&str> = rel.cells.iter().map(|c| c.to.as_str()).collect();
+            for (axis, dim_id, used, required) in [
+                ("from", &rel.from, &from_used, from_required),
+                ("to", &rel.to, &to_used, to_required),
+            ] {
+                let Some(dim) = self.doc.dimensions.iter().find(|d| &d.id == dim_id) else {
+                    continue; // relation onto an undeclared dimension: nothing to evaluate
+                };
+                let (covered, uncovered): (Vec<_>, Vec<_>) = dim
+                    .members
+                    .iter()
+                    .filter(|m| member_active(m))
+                    .map(|m| m.id.clone())
+                    .partition(|id| used.contains(id.as_str()));
+                out.push(AxisCoverage {
+                    relation: rel.id.clone(),
+                    axis: axis.to_string(),
+                    dimension: dim.id.clone(),
+                    required,
+                    covered,
+                    uncovered,
+                });
+            }
+        }
+        out
+    }
+
+    /// Traceability gaps: members that appear in NO cell of any
+    /// (non-deprecated) relation, in declared dimension/member order.
+    pub fn orphans(&self) -> Vec<Orphan> {
+        let mut used: HashSet<&str> = HashSet::new();
+        for rel in self.doc.relations.iter().filter(|r| relation_active(r)) {
+            for cell in &rel.cells {
+                used.insert(cell.from.as_str());
+                used.insert(cell.to.as_str());
+            }
+        }
+        self.doc
+            .dimensions
+            .iter()
+            .flat_map(|dim| {
+                dim.members
+                    .iter()
+                    .filter(|m| member_active(m) && !used.contains(m.id.as_str()))
+                    .map(|m| Orphan {
+                        dimension: dim.id.clone(),
+                        member: m.id.clone(),
+                    })
+            })
+            .collect()
+    }
+
+    /// The highest-priority gaps to close next. Heuristic: the orphans
+    /// ([`Model::orphans`]) ordered by resolved importance weight descending
+    /// (explicit `weight`, else `weightObservation` via the dimension's
+    /// `weightScale`); unweighted members last, then declared order.
+    pub fn gaps_next(&self) -> Vec<Gap> {
+        let mut gaps: Vec<Gap> = self
+            .orphans()
+            .into_iter()
+            .map(|o| {
+                let weight = self
+                    .doc
+                    .dimensions
+                    .iter()
+                    .find(|d| d.id == o.dimension)
+                    .and_then(|dim| {
+                        let m = dim.members.iter().find(|m| m.id == o.member)?;
+                        self.resolved_weight(dim, m)
+                    });
+                Gap {
+                    dimension: o.dimension,
+                    member: o.member,
+                    weight,
+                }
+            })
+            .collect();
+        gaps.sort_by(|a, b| {
+            let wa = a.weight.unwrap_or(f64::NEG_INFINITY);
+            let wb = b.weight.unwrap_or(f64::NEG_INFINITY);
+            wb.partial_cmp(&wa)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| (&a.dimension, &a.member).cmp(&(&b.dimension, &b.member)))
+        });
+        gaps
+    }
+
+    /// Structural summary: dimensions, relations (with cell counts + coverage
+    /// policy), scales, and contraction chains.
+    pub fn describe(&self) -> ModelDescription {
+        ModelDescription {
+            model_id: self.doc.model_id.clone(),
+            dimensions: self
+                .doc
+                .dimensions
+                .iter()
+                .map(|d| DimensionSummary {
+                    id: d.id.clone(),
+                    label: d.label.clone(),
+                    kind: d.kind.as_ref().map(|k| k.to_string()),
+                    members: d.members.len(),
+                })
+                .collect(),
+            relations: self
+                .doc
+                .relations
+                .iter()
+                .map(|r| RelationSummary {
+                    id: r.id.clone(),
+                    from: r.from.clone(),
+                    to: r.to.clone(),
+                    relation_type: r.relation_type.to_string(),
+                    scale: r.scale.clone(),
+                    coverage_policy: r.coverage_policy.to_string(),
+                    cells: r.cells.len(),
+                })
+                .collect(),
+            scales: self.doc.scales.iter().map(|s| s.id.clone()).collect(),
+            contractions: self.doc.contractions.iter().map(|c| c.id.clone()).collect(),
+        }
+    }
+
+    /// The cells of one relation, optionally filtered by `from`/`to` member.
+    /// `None` when the relation id is unknown (fail-fast at the caller).
+    pub fn slice(
+        &self,
+        relation_id: &str,
+        from: Option<&str>,
+        to: Option<&str>,
+    ) -> Option<Vec<&Cell>> {
+        let rel = self.doc.relations.iter().find(|r| r.id == relation_id)?;
+        Some(
+            rel.cells
+                .iter()
+                .filter(|c| from.is_none_or(|f| c.from == f) && to.is_none_or(|t| c.to == t))
+                .collect(),
+        )
+    }
+
+    /// Resolve a member's importance weight: explicit `weight`, else
+    /// `weightObservation` looked up in the dimension's `weightScale`.
+    fn resolved_weight(&self, dim: &Dimension, m: &Member) -> Option<f64> {
+        if let Some(w) = m.weight {
+            return Some(w);
+        }
+        let ws_id = dim.weight_scale.as_deref()?;
+        let scale = self.doc.scales.iter().find(|s| s.id == ws_id)?;
+        let wo = m.weight_observation.as_deref()?;
+        scale
+            .levels
+            .iter()
+            .find(|l| l.observation == wo)
+            .map(|l| l.value)
+    }
+
     fn check_source_ref_staleness(&self, sr: &SourceRef, findings: &mut Vec<Finding>) {
         let content_hash = match &sr.content_hash {
             Some(h) if !h.is_empty() => h,
@@ -566,6 +789,104 @@ impl Model {
 pub enum Axis {
     From,
     To,
+}
+
+/// Lifecycle filter: deprecated elements are excluded from analyses.
+fn member_active(m: &Member) -> bool {
+    !matches!(m.status, Some(raw::LifecycleStatus::Deprecated))
+}
+
+fn relation_active(r: &Relation) -> bool {
+    !matches!(r.status, Some(raw::LifecycleStatus::Deprecated))
+}
+
+/// Direction of a [`TraceHop`] relative to the traced member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceDirection {
+    /// The traced member is on the relation's `from` axis.
+    Out,
+    /// The traced member is on the relation's `to` axis.
+    In,
+}
+
+/// One hop of a traceability walk: a related member reached through a cell.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct TraceHop {
+    pub relation: String,
+    #[serde(rename = "relationType")]
+    pub relation_type: String,
+    pub direction: TraceDirection,
+    /// The related member on the other side of the cell.
+    pub member: String,
+    /// The dimension that member belongs to.
+    pub dimension: String,
+    /// Observation tokens recorded on the connecting cell.
+    pub observations: Vec<String>,
+}
+
+/// Coverage of one axis of one relation: which members of the axis dimension
+/// have ≥1 cell, and which don't.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct AxisCoverage {
+    pub relation: String,
+    /// `"from"` or `"to"`.
+    pub axis: String,
+    pub dimension: String,
+    /// Whether the relation's `coveragePolicy` makes uncovered members a violation.
+    pub required: bool,
+    pub covered: Vec<String>,
+    pub uncovered: Vec<String>,
+}
+
+/// A member with no relationship at all — a traceability gap.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Orphan {
+    pub dimension: String,
+    pub member: String,
+}
+
+/// An orphan ranked for gap-closing priority (see [`Model::gaps_next`]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Gap {
+    pub dimension: String,
+    pub member: String,
+    /// Resolved importance weight; `None` when the member is unweighted.
+    pub weight: Option<f64>,
+}
+
+/// Structural summary of a model (see [`Model::describe`]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ModelDescription {
+    #[serde(rename = "modelId")]
+    pub model_id: String,
+    pub dimensions: Vec<DimensionSummary>,
+    pub relations: Vec<RelationSummary>,
+    pub scales: Vec<String>,
+    pub contractions: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct DimensionSummary {
+    pub id: String,
+    pub label: Option<String>,
+    pub kind: Option<String>,
+    /// Member count.
+    pub members: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct RelationSummary {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    #[serde(rename = "relationType")]
+    pub relation_type: String,
+    pub scale: String,
+    #[serde(rename = "coveragePolicy")]
+    pub coverage_policy: String,
+    /// Cell count.
+    pub cells: usize,
 }
 
 #[cfg(test)]
@@ -717,6 +1038,123 @@ mod tests {
             !result.is_empty(),
             "contract must return at least one entry for the example contraction chain"
         );
+    }
+
+    // ── traceability queries ──
+
+    /// Minimal 2-axis fixture: d1{a,b} × d2{x}, one cell a→x. `b` is the orphan.
+    fn tiny(cells: &str) -> Model {
+        let json = format!(
+            r#"{{"schemaVersion":"0.2.0","modelId":"tiny",
+              "dimensions":[
+                {{"id":"d1","order":0,"weightScale":"importance","members":[
+                  {{"id":"a","weightObservation":"low"}},
+                  {{"id":"b","weightObservation":"high"}}]}},
+                {{"id":"d2","order":1,"members":[{{"id":"x"}}]}}
+              ],
+              "scales":[
+                {{"id":"qfd","levels":[
+                  {{"observation":"none","value":0,"order":0}},
+                  {{"observation":"strong","value":9,"order":3}}]}},
+                {{"id":"importance","levels":[
+                  {{"observation":"low","value":1,"order":0}},
+                  {{"observation":"high","value":9,"order":1}}]}}
+              ],
+              "relations":[{{"id":"r1","from":"d1","to":"d2","relationType":"supports",
+                "scale":"qfd","coveragePolicy":"every_from","cells":[{cells}]}}]}}"#
+        );
+        Model::load(&json).expect("tiny fixture must load")
+    }
+
+    #[test]
+    fn trace_returns_related_members_on_the_other_axis() {
+        let hops = load_example().trace("req_secure_payment");
+        let related: Vec<&str> = hops.iter().map(|h| h.member.as_str()).collect();
+        assert_eq!(related, vec!["char_encryption", "char_idempotent_api"]);
+    }
+
+    #[test]
+    fn trace_reports_inbound_direction_for_target_members() {
+        let hops = load_example().trace("fail_data_breach");
+        assert!(
+            !hops.is_empty() && hops.iter().all(|h| h.direction == TraceDirection::In),
+            "a pure target member must trace as inbound hops"
+        );
+    }
+
+    #[test]
+    fn coverage_flags_uncovered_member() {
+        let model = tiny(r#"{"from":"a","to":"x","observations":[{"observation":"strong"}]}"#);
+        let axis = model
+            .coverage()
+            .into_iter()
+            .find(|c| c.axis == "from")
+            .expect("from-axis coverage must exist");
+        assert_eq!(axis.uncovered, vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn coverage_required_follows_coverage_policy() {
+        let model = tiny(r#"{"from":"a","to":"x","observations":[{"observation":"strong"}]}"#);
+        let required: Vec<bool> = model.coverage().iter().map(|c| c.required).collect();
+        // coveragePolicy every_from: from axis gated, to axis not.
+        assert_eq!(required, vec![true, false]);
+    }
+
+    #[test]
+    fn orphans_returns_exactly_the_unrelated_members() {
+        let model = tiny(r#"{"from":"a","to":"x","observations":[{"observation":"strong"}]}"#);
+        assert_eq!(
+            model.orphans(),
+            vec![Orphan {
+                dimension: "d1".into(),
+                member: "b".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn fully_covered_matrix_has_empty_orphans() {
+        let model = tiny(
+            r#"{"from":"a","to":"x","observations":[{"observation":"strong"}]},
+               {"from":"b","to":"x","observations":[{"observation":"strong"}]}"#,
+        );
+        assert!(model.orphans().is_empty());
+    }
+
+    #[test]
+    fn gaps_next_orders_uncovered_by_weight_descending_unweighted_last() {
+        let model = tiny(""); // no cells: everything is a gap
+        let gaps = model.gaps_next();
+        let order: Vec<&str> = gaps.iter().map(|g| g.member.as_str()).collect();
+        // b (high=9) before a (low=1) before x (unweighted).
+        assert_eq!(order, vec!["b", "a", "x"]);
+    }
+
+    #[test]
+    fn describe_summarizes_dimensions_relations_and_counts() {
+        let d = load_example().describe();
+        assert!(
+            d.dimensions.len() == 3
+                && d.relations
+                    .iter()
+                    .any(|r| r.id == "rel_req_char" && r.cells == 4),
+            "describe must report 3 dimensions and rel_req_char with 4 cells"
+        );
+    }
+
+    #[test]
+    fn slice_filters_cells_by_from_member() {
+        let model = load_example();
+        let cells = model
+            .slice("rel_req_char", Some("req_secure_payment"), None)
+            .expect("relation must exist");
+        assert_eq!(cells.len(), 2);
+    }
+
+    #[test]
+    fn slice_on_unknown_relation_is_none() {
+        assert!(load_example().slice("rel_nope", None, None).is_none());
     }
 
     #[test]
