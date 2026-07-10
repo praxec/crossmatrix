@@ -17,12 +17,18 @@ fn travel_mug_sample_has_three_dimensions() {
 
 #[test]
 fn travel_mug_sample_contracts_non_empty() {
-    assert!(!travel_mug().contract("ctr_need_failure_exposure").is_empty());
+    assert!(
+        !travel_mug()
+            .contract("ctr_need_failure_exposure")
+            .is_empty()
+    );
 }
 
 #[test]
 fn travel_mug_sample_marginalizes_a_relation() {
-    assert!(travel_mug()
-        .marginalize("rel_need_part", crossmatrix::Axis::From)
-        .is_ok());
+    assert!(
+        travel_mug()
+            .marginalize("rel_need_part", crossmatrix::Axis::From)
+            .is_ok()
+    );
 }

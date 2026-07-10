@@ -10,7 +10,7 @@ use rmcp::model::*;
 use rmcp::service::RequestContext;
 use rmcp::transport::stdio;
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 type McpError = rmcp::ErrorData;
 
@@ -27,6 +27,21 @@ impl S {
             model: Some(model),
             request_cache: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// The loaded model, or the recoverable "no model" diagnostic.
+    fn model(&self) -> Result<&crossmatrix::Model, String> {
+        self.model
+            .as_ref()
+            .ok_or_else(|| "no model loaded".to_string())
+    }
+
+    /// A required string parameter under `/query/<name>` (fail-fast, recoverable).
+    fn str_param<'a>(request: &'a Value, name: &str) -> Result<&'a str, String> {
+        request
+            .pointer(&format!("/query/{name}"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("query requires string parameter 'query.{name}'"))
     }
 
     fn make_tool(name: &'static str, description: &'static str, schema: Value) -> Tool {
@@ -61,10 +76,10 @@ impl S {
         match name {
             "crossmatrix.command" => {
                 // Idempotency: if requestId was already processed, replay.
-                if let Some(request_id) = request.get("requestId").and_then(|v| v.as_str()) {
-                    if let Some(cached) = self.request_cache.lock().unwrap().get(request_id) {
-                        return cached.clone();
-                    }
+                if let Some(request_id) = request.get("requestId").and_then(|v| v.as_str())
+                    && let Some(cached) = self.request_cache.lock().unwrap().get(request_id)
+                {
+                    return cached.clone();
                 }
 
                 let kind = request
@@ -173,11 +188,110 @@ impl S {
                             }
                         }))
                     }
+                    "describe" => {
+                        let model = self.model()?;
+                        let description = serde_json::to_value(model.describe())
+                            .map_err(|e| format!("serialize description: {e}"))?;
+                        Ok(json!({
+                            "describe": description,
+                            "links": ["slice", "trace", "coverage", "gaps.orphans", "gaps.next", "validate"]
+                        }))
+                    }
+                    "slice" => {
+                        let model = self.model()?;
+                        let relation = Self::str_param(&request, "relationId")?;
+                        let from = request.pointer("/query/from").and_then(|v| v.as_str());
+                        let to = request.pointer("/query/to").and_then(|v| v.as_str());
+                        let cells = model
+                            .slice(relation, from, to)
+                            .ok_or_else(|| format!("unknown relation: {relation}"))?;
+                        Ok(json!({
+                            "relation": relation,
+                            "cells": cells,
+                            "links": ["describe", "trace", "explain"]
+                        }))
+                    }
+                    "trace" => {
+                        let model = self.model()?;
+                        let member = Self::str_param(&request, "member")?;
+                        let dimension = model
+                            .dimension_of(member)
+                            .ok_or_else(|| format!("unknown member: {member}"))?
+                            .to_string();
+                        Ok(json!({
+                            "member": member,
+                            "dimension": dimension,
+                            "hops": model.trace(member),
+                            "links": ["explain", "coverage", "gaps.orphans", "describe"]
+                        }))
+                    }
+                    "explain" => {
+                        let model = self.model()?;
+                        let relation = Self::str_param(&request, "relationId")?;
+                        let from = Self::str_param(&request, "from")?;
+                        let to = Self::str_param(&request, "to")?;
+                        let cells = model
+                            .slice(relation, Some(from), Some(to))
+                            .ok_or_else(|| format!("unknown relation: {relation}"))?;
+                        Ok(json!({
+                            "relation": relation,
+                            "from": from,
+                            "to": to,
+                            "cells": cells,
+                            "links": ["trace", "slice", "describe"]
+                        }))
+                    }
+                    "coverage" => {
+                        let model = self.model()?;
+                        let axes = model.coverage();
+                        let uncovered: usize = axes.iter().map(|a| a.uncovered.len()).sum();
+                        let violations = axes
+                            .iter()
+                            .filter(|a| a.required && !a.uncovered.is_empty())
+                            .count();
+                        let axis_count = axes.len();
+                        Ok(json!({
+                            "axes": axes,
+                            "summary": { "axes": axis_count, "uncovered": uncovered, "violations": violations },
+                            "links": ["gaps.orphans", "gaps.next", "trace", "describe"]
+                        }))
+                    }
+                    "gaps.orphans" => {
+                        let model = self.model()?;
+                        Ok(json!({
+                            "orphans": model.orphans(),
+                            "links": ["gaps.next", "coverage", "trace"]
+                        }))
+                    }
+                    "gaps.next" => {
+                        let model = self.model()?;
+                        Ok(json!({
+                            "gaps": model.gaps_next(),
+                            "heuristic": "uncovered members ordered by resolved importance weight (unweighted last)",
+                            "links": ["gaps.orphans", "coverage", "trace"]
+                        }))
+                    }
+                    "stale" => {
+                        let model = self.model()?;
+                        let stale: Vec<Value> = model
+                            .findings()
+                            .into_iter()
+                            .filter(|f| matches!(f.kind, crossmatrix::FindingKind::StaleReference))
+                            .map(|f| {
+                                serde_json::to_value(&f)
+                                    .map_err(|e| format!("serialize finding: {e}"))
+                            })
+                            .collect::<Result<_, _>>()?;
+                        Ok(json!({
+                            "findings": stale,
+                            "links": ["analyze.findings", "describe", "validate"]
+                        }))
+                    }
                     _ => Ok(json!({
                         "ok": true,
                         "query": kind,
-                        "note": "query not supported in this build (slice/describe/trace/gaps deferred)",
-                        "links": ["analyze.contract", "analyze.findings", "validate"]
+                        "note": "query not supported in this build (conflicts needs valence/tension analysis — ADR-0002; export deferred)",
+                        "links": ["describe", "trace", "coverage", "gaps.orphans", "validate"]
                     })),
                 }
             }
@@ -423,6 +537,112 @@ mod tests {
         assert!(
             result.is_err(),
             "numeric weight without sourceRef.system must be rejected as observation-only"
+        );
+    }
+
+    /// Arrange: an S over the split example fixtures (shared by the
+    /// traceability-query dispatch tests).
+    fn example_server() -> S {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().to_path_buf();
+
+        let config_store = ConfigStore::new(root.clone());
+        let dims_store = DimensionsStore::new(root.clone());
+        let state_store = StateStore::new(root);
+
+        let config: CrossMatrixConfiguration =
+            serde_json::from_str(include_str!("../../../examples/split/hoq.config.json"))
+                .expect("deserialize config fixture");
+        let dims: CrossMatrixDimensions = serde_json::from_str(include_str!(
+            "../../../examples/split/qfd-fmeca.dimensions.json"
+        ))
+        .expect("deserialize dimensions fixture");
+        let state: CrossMatrixState =
+            serde_json::from_str(include_str!("../../../examples/split/demo.state.json"))
+                .expect("deserialize state fixture");
+
+        config_store.put(&config).expect("put config");
+        dims_store.put(&dims).expect("put dimensions");
+        state_store.put(&state).expect("put state");
+
+        let model = open(
+            &config_store,
+            &dims_store,
+            &state_store,
+            &state.state_id,
+            state.version.as_deref().unwrap_or(""),
+        )
+        .expect("open must succeed");
+
+        S::new(model)
+    }
+
+    fn query(s: &S, q: serde_json::Value) -> Result<Value, String> {
+        s.call_tool_impl("crossmatrix.query", json!({"request": {"query": q}}))
+    }
+
+    #[test]
+    fn query_trace_returns_related_members() {
+        let s = example_server();
+        let result = query(&s, json!({"kind": "trace", "member": "req_secure_payment"}))
+            .expect("trace must succeed");
+        let hops = result.pointer("/hops").and_then(|v| v.as_array());
+        assert!(
+            hops.map(|a| !a.is_empty()).unwrap_or(false),
+            "trace of a related member must return non-empty hops"
+        );
+    }
+
+    #[test]
+    fn query_trace_unknown_member_is_a_recoverable_error() {
+        let s = example_server();
+        assert!(
+            query(&s, json!({"kind": "trace", "member": "req_nope"})).is_err(),
+            "trace of an unknown member must fail fast"
+        );
+    }
+
+    #[test]
+    fn query_coverage_reports_uncovered_members() {
+        let s = example_server();
+        let result = query(&s, json!({"kind": "coverage"})).expect("coverage must succeed");
+        // rel_char_exposes_fail leaves char_response_latency + char_return_workflow
+        // uncovered on its from-axis, so the summary must be non-zero.
+        assert!(
+            result
+                .pointer("/summary/uncovered")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                > 0,
+            "example matrix has uncovered axis members"
+        );
+    }
+
+    #[test]
+    fn query_gaps_orphans_is_empty_on_fully_related_example() {
+        let s = example_server();
+        let result = query(&s, json!({"kind": "gaps.orphans"})).expect("orphans must succeed");
+        assert_eq!(
+            result
+                .pointer("/orphans")
+                .and_then(|v| v.as_array())
+                .map(Vec::len),
+            Some(0),
+            "every member of the split example appears in a cell"
+        );
+    }
+
+    #[test]
+    fn query_describe_summarizes_the_model() {
+        let s = example_server();
+        let result = query(&s, json!({"kind": "describe"})).expect("describe must succeed");
+        assert_eq!(
+            result
+                .pointer("/describe/dimensions")
+                .and_then(|v| v.as_array())
+                .map(Vec::len),
+            Some(3),
+            "describe must report the example's 3 dimensions"
         );
     }
 
