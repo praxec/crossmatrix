@@ -661,6 +661,51 @@ mod tests {
         );
     }
 
+    /// E4 — the one-call HOQ round-trip: import the whole engine model via
+    /// `crossmatrix.command`, then rank the HOWs via `analyze.marginalize`. This
+    /// is exactly the two-tool drive the pack capability performs, headless.
+    ///
+    /// Expected weighted per-HOW importance (weight × max qfd, from the fixtures):
+    ///   char_response_latency = high(9) × strong(9) = 81
+    ///   char_encryption       = high(9) × strong(9) = 81
+    ///   char_idempotent_api   = high(9) × moderate(3) = 27
+    ///   char_return_workflow  = medium(3) × strong(9) = 27
+    #[test]
+    fn one_call_hoq_roundtrip_ranks_high_importance_how_on_top() {
+        // Arrange + Act: import then marginalize the WHAT axis of rel_req_char.
+        let s = S::default();
+        let _ = import_example(&s);
+        let result = query(
+            &s,
+            json!({"kind": "analyze.marginalize", "relationId": "rel_req_char", "axis": "from"}),
+        )
+        .expect("marginalize must succeed");
+        let findings = result
+            .pointer("/findings")
+            .and_then(|v| v.as_array())
+            .expect("findings array");
+
+        // The top-ranked HOW must be a high-importance-driven characteristic at 81,
+        // outranking char_idempotent_api (a weakly-related HOW at 27).
+        let top = &findings[0];
+        let top_member = top.get("member").and_then(|v| v.as_str()).unwrap_or("");
+        let top_value = top.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let idempotent = findings
+            .iter()
+            .find(|f| f.get("member").and_then(|v| v.as_str()) == Some("char_idempotent_api"))
+            .and_then(|f| f.get("value").and_then(|v| v.as_f64()))
+            .expect("char_idempotent_api must appear in the ranking");
+
+        // Assert: the ranking is weighted-importance driven, not agent-invented.
+        assert!(
+            (top_member == "char_response_latency" || top_member == "char_encryption")
+                && (top_value - 81.0).abs() < f64::EPSILON
+                && top_value > idempotent,
+            "top HOW must be a high-importance characteristic at 81 outranking the \
+             weakly-related char_idempotent_api ({idempotent}); got {top_member}={top_value}"
+        );
+    }
+
     #[test]
     fn query_analyze_marginalize_returns_ranked_member_value_pairs() {
         // Arrange: import the example model (no S::new preload).
@@ -677,7 +722,9 @@ mod tests {
         let findings = result.pointer("/findings").and_then(|v| v.as_array());
         assert!(
             findings
-                .map(|a| !a.is_empty() && a.iter().all(|f| f.get("member").is_some() && f.get("value").is_some()))
+                .map(|a| !a.is_empty()
+                    && a.iter()
+                        .all(|f| f.get("member").is_some() && f.get("value").is_some()))
                 .unwrap_or(false),
             "analyze.marginalize must return non-empty {{member, value}} pairs"
         );
