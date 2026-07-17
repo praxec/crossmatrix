@@ -120,9 +120,14 @@ impl S {
                 // If a full model is supplied (e.g. import), validate it through core.
                 let result = if let Some(model) = request.get("model") {
                     match crossmatrix::Model::load(&model.to_string()) {
-                        Ok(_) => Ok(
-                            json!({ "ok": true, "op": kind, "validated": true, "links": ["query"] }),
-                        ),
+                        Ok(loaded) => {
+                            // Persist the validated model so a later query on the
+                            // same session can analyze it (one-call HOQ, ADR-0004 §B).
+                            *self.model.lock().unwrap() = Some(loaded);
+                            Ok(
+                                json!({ "ok": true, "op": kind, "validated": true, "links": ["query"] }),
+                            )
+                        }
                         Err(e) => Err(format!("model failed validation: {e}")),
                     }
                 } else {
@@ -579,6 +584,69 @@ mod tests {
 
     fn query(s: &S, q: serde_json::Value) -> Result<Value, String> {
         s.call_tool_impl("crossmatrix.query", json!({"request": {"query": q}}))
+    }
+
+    /// The three split example fixtures merged into the flat engine model doc
+    /// that `crossmatrix.command` imports (the shape `merge()` emits).
+    fn merged_example_model() -> serde_json::Value {
+        let config: CrossMatrixConfiguration =
+            serde_json::from_str(include_str!("../../../examples/split/hoq.config.json"))
+                .expect("deserialize config fixture");
+        let dims: CrossMatrixDimensions = serde_json::from_str(include_str!(
+            "../../../examples/split/qfd-fmeca.dimensions.json"
+        ))
+        .expect("deserialize dimensions fixture");
+        let state: CrossMatrixState =
+            serde_json::from_str(include_str!("../../../examples/split/demo.state.json"))
+                .expect("deserialize state fixture");
+        crossmatrix_mcp::merge::merge(&config, &dims, &state).expect("merge must succeed")
+    }
+
+    /// Import the merged example model into `s` via `crossmatrix.command`
+    /// (no `S::new` preload) and return the import response.
+    fn import_example(s: &S) -> Value {
+        s.call_tool_impl(
+            "crossmatrix.command",
+            json!({
+                "request": {
+                    "requestId": "hoq-import-1",
+                    "modelId": "state_demo",
+                    "model": merged_example_model(),
+                }
+            }),
+        )
+        .expect("import command must succeed")
+    }
+
+    #[test]
+    fn command_import_persists_model_so_query_validate_is_true() {
+        // Arrange: a fresh server with no preloaded model.
+        let s = S::default();
+        // Act: import the whole model via command, then validate via query.
+        let _ = import_example(&s);
+        let result = query(&s, json!({"kind": "validate"})).expect("validate must succeed");
+        // Assert: the imported model persisted across the command→query round-trip.
+        assert_eq!(
+            result.pointer("/validated").and_then(|v| v.as_bool()),
+            Some(true),
+            "imported model must persist so a later query validates true"
+        );
+    }
+
+    #[test]
+    fn command_import_persists_model_so_analyze_contract_sees_it() {
+        // Arrange: a fresh server; persistence must reach the analysis arms.
+        let s = S::default();
+        // Act: import, then analyze.contract — WITHOUT any S::new preload.
+        let _ = import_example(&s);
+        let result =
+            query(&s, json!({"kind": "analyze.contract"})).expect("analyze.contract must succeed");
+        // Assert: the req→fail exposure findings are computed off the imported model.
+        let findings = result.pointer("/findings").and_then(|v| v.as_array());
+        assert!(
+            findings.map(|a| !a.is_empty()).unwrap_or(false),
+            "analyze.contract must see the imported model and return findings"
+        );
     }
 
     #[test]
