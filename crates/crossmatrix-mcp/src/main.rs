@@ -16,7 +16,10 @@ type McpError = rmcp::ErrorData;
 
 #[derive(Clone, Default)]
 struct S {
-    model: Option<crossmatrix::Model>,
+    // Interior-mutable so a `&self` `crossmatrix.command` (import) can persist the
+    // loaded model for a later `crossmatrix.query` on the same MCP session. Cloning
+    // `S` (rmcp handler) shares the same cell via the `Arc`.
+    model: Arc<Mutex<Option<crossmatrix::Model>>>,
     request_cache: Arc<Mutex<HashMap<String, Result<Value, String>>>>,
 }
 
@@ -24,15 +27,18 @@ impl S {
     #[allow(dead_code)]
     fn new(model: crossmatrix::Model) -> Self {
         Self {
-            model: Some(model),
+            model: Arc::new(Mutex::new(Some(model))),
             request_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// The loaded model, or the recoverable "no model" diagnostic.
-    fn model(&self) -> Result<&crossmatrix::Model, String> {
+    /// The loaded model (cloned out of the shared cell), or the recoverable
+    /// "no model" diagnostic.
+    fn model(&self) -> Result<crossmatrix::Model, String> {
         self.model
-            .as_ref()
+            .lock()
+            .unwrap()
+            .clone()
             .ok_or_else(|| "no model loaded".to_string())
     }
 
@@ -114,9 +120,14 @@ impl S {
                 // If a full model is supplied (e.g. import), validate it through core.
                 let result = if let Some(model) = request.get("model") {
                     match crossmatrix::Model::load(&model.to_string()) {
-                        Ok(_) => Ok(
-                            json!({ "ok": true, "op": kind, "validated": true, "links": ["query"] }),
-                        ),
+                        Ok(loaded) => {
+                            // Persist the validated model so a later query on the
+                            // same session can analyze it (one-call HOQ, ADR-0004 §B).
+                            *self.model.lock().unwrap() = Some(loaded);
+                            Ok(
+                                json!({ "ok": true, "op": kind, "validated": true, "links": ["query"] }),
+                            )
+                        }
                         Err(e) => Err(format!("model failed validation: {e}")),
                     }
                 } else {
@@ -140,10 +151,7 @@ impl S {
                     .unwrap_or("");
                 match kind {
                     "analyze.contract" => {
-                        let model = self
-                            .model
-                            .as_ref()
-                            .ok_or_else(|| "no model loaded".to_string())?;
+                        let model = self.model()?;
                         let mut all_findings: Vec<Value> = Vec::new();
                         for cid in model.contraction_ids() {
                             let findings = model.contract(cid);
@@ -160,10 +168,7 @@ impl S {
                         }))
                     }
                     "analyze.findings" => {
-                        let model = self
-                            .model
-                            .as_ref()
-                            .ok_or_else(|| "no model loaded".to_string())?;
+                        let model = self.model()?;
                         let findings: Vec<Value> = model
                             .findings()
                             .into_iter()
@@ -178,7 +183,7 @@ impl S {
                         }))
                     }
                     "validate" => {
-                        let validated = self.model.is_some();
+                        let validated = self.model.lock().unwrap().is_some();
                         Ok(json!({
                             "validated": validated,
                             "links": if validated {
@@ -269,6 +274,34 @@ impl S {
                             "gaps": model.gaps_next(),
                             "heuristic": "uncovered members ordered by resolved importance weight (unweighted last)",
                             "links": ["gaps.orphans", "coverage", "trace"]
+                        }))
+                    }
+                    "analyze.marginalize" => {
+                        // The genuine per-HOW weighted technical-importance rollup:
+                        // wraps the core Model::marginalize. Never agent-computed.
+                        let model = self.model()?;
+                        let relation = Self::str_param(&request, "relationId")?;
+                        let axis = match Self::str_param(&request, "axis")? {
+                            "from" => crossmatrix::Axis::From,
+                            "to" => crossmatrix::Axis::To,
+                            other => {
+                                return Err(format!(
+                                    "query.axis must be 'from' or 'to', got '{other}'"
+                                ));
+                            }
+                        };
+                        // The engine returns pairs already sorted descending; an
+                        // unweighted-member diagnostic is returned verbatim (fail-fast).
+                        let pairs = model
+                            .marginalize(relation, axis)
+                            .map_err(|e| format!("marginalize failed: {e}"))?;
+                        let findings: Vec<Value> = pairs
+                            .into_iter()
+                            .map(|(member, value)| json!({ "member": member, "value": value }))
+                            .collect();
+                        Ok(json!({
+                            "findings": findings,
+                            "links": ["analyze.contract", "analyze.findings", "validate", "describe"]
                         }))
                     }
                     "stale" => {
@@ -579,6 +612,138 @@ mod tests {
 
     fn query(s: &S, q: serde_json::Value) -> Result<Value, String> {
         s.call_tool_impl("crossmatrix.query", json!({"request": {"query": q}}))
+    }
+
+    /// The three split example fixtures merged into the flat engine model doc
+    /// that `crossmatrix.command` imports (the shape `merge()` emits).
+    fn merged_example_model() -> serde_json::Value {
+        let config: CrossMatrixConfiguration =
+            serde_json::from_str(include_str!("../../../examples/split/hoq.config.json"))
+                .expect("deserialize config fixture");
+        let dims: CrossMatrixDimensions = serde_json::from_str(include_str!(
+            "../../../examples/split/qfd-fmeca.dimensions.json"
+        ))
+        .expect("deserialize dimensions fixture");
+        let state: CrossMatrixState =
+            serde_json::from_str(include_str!("../../../examples/split/demo.state.json"))
+                .expect("deserialize state fixture");
+        crossmatrix_mcp::merge::merge(&config, &dims, &state).expect("merge must succeed")
+    }
+
+    /// Import the merged example model into `s` via `crossmatrix.command`
+    /// (no `S::new` preload) and return the import response.
+    fn import_example(s: &S) -> Value {
+        s.call_tool_impl(
+            "crossmatrix.command",
+            json!({
+                "request": {
+                    "requestId": "hoq-import-1",
+                    "modelId": "state_demo",
+                    "model": merged_example_model(),
+                }
+            }),
+        )
+        .expect("import command must succeed")
+    }
+
+    #[test]
+    fn command_import_persists_model_so_query_validate_is_true() {
+        // Arrange: a fresh server with no preloaded model.
+        let s = S::default();
+        // Act: import the whole model via command, then validate via query.
+        let _ = import_example(&s);
+        let result = query(&s, json!({"kind": "validate"})).expect("validate must succeed");
+        // Assert: the imported model persisted across the command→query round-trip.
+        assert_eq!(
+            result.pointer("/validated").and_then(|v| v.as_bool()),
+            Some(true),
+            "imported model must persist so a later query validates true"
+        );
+    }
+
+    /// E4 — the one-call HOQ round-trip: import the whole engine model via
+    /// `crossmatrix.command`, then rank the HOWs via `analyze.marginalize`. This
+    /// is exactly the two-tool drive the pack capability performs, headless.
+    ///
+    /// Expected weighted per-HOW importance (weight × max qfd, from the fixtures):
+    ///   char_response_latency = high(9) × strong(9) = 81
+    ///   char_encryption       = high(9) × strong(9) = 81
+    ///   char_idempotent_api   = high(9) × moderate(3) = 27
+    ///   char_return_workflow  = medium(3) × strong(9) = 27
+    #[test]
+    fn one_call_hoq_roundtrip_ranks_high_importance_how_on_top() {
+        // Arrange + Act: import then marginalize the WHAT axis of rel_req_char.
+        let s = S::default();
+        let _ = import_example(&s);
+        let result = query(
+            &s,
+            json!({"kind": "analyze.marginalize", "relationId": "rel_req_char", "axis": "from"}),
+        )
+        .expect("marginalize must succeed");
+        let findings = result
+            .pointer("/findings")
+            .and_then(|v| v.as_array())
+            .expect("findings array");
+
+        // The top-ranked HOW must be a high-importance-driven characteristic at 81,
+        // outranking char_idempotent_api (a weakly-related HOW at 27).
+        let top = &findings[0];
+        let top_member = top.get("member").and_then(|v| v.as_str()).unwrap_or("");
+        let top_value = top.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let idempotent = findings
+            .iter()
+            .find(|f| f.get("member").and_then(|v| v.as_str()) == Some("char_idempotent_api"))
+            .and_then(|f| f.get("value").and_then(|v| v.as_f64()))
+            .expect("char_idempotent_api must appear in the ranking");
+
+        // Assert: the ranking is weighted-importance driven, not agent-invented.
+        assert!(
+            (top_member == "char_response_latency" || top_member == "char_encryption")
+                && (top_value - 81.0).abs() < f64::EPSILON
+                && top_value > idempotent,
+            "top HOW must be a high-importance characteristic at 81 outranking the \
+             weakly-related char_idempotent_api ({idempotent}); got {top_member}={top_value}"
+        );
+    }
+
+    #[test]
+    fn query_analyze_marginalize_returns_ranked_member_value_pairs() {
+        // Arrange: import the example model (no S::new preload).
+        let s = S::default();
+        let _ = import_example(&s);
+        // Act: the genuine per-HOW weighted rollup — roll up the WHAT axis of
+        // rel_req_char; survivors are the HOWs (dim_char).
+        let result = query(
+            &s,
+            json!({"kind": "analyze.marginalize", "relationId": "rel_req_char", "axis": "from"}),
+        )
+        .expect("analyze.marginalize must succeed");
+        // Assert: a non-empty array of {member, value} for the HOW axis.
+        let findings = result.pointer("/findings").and_then(|v| v.as_array());
+        assert!(
+            findings
+                .map(|a| !a.is_empty()
+                    && a.iter()
+                        .all(|f| f.get("member").is_some() && f.get("value").is_some()))
+                .unwrap_or(false),
+            "analyze.marginalize must return non-empty {{member, value}} pairs"
+        );
+    }
+
+    #[test]
+    fn command_import_persists_model_so_analyze_contract_sees_it() {
+        // Arrange: a fresh server; persistence must reach the analysis arms.
+        let s = S::default();
+        // Act: import, then analyze.contract — WITHOUT any S::new preload.
+        let _ = import_example(&s);
+        let result =
+            query(&s, json!({"kind": "analyze.contract"})).expect("analyze.contract must succeed");
+        // Assert: the req→fail exposure findings are computed off the imported model.
+        let findings = result.pointer("/findings").and_then(|v| v.as_array());
+        assert!(
+            findings.map(|a| !a.is_empty()).unwrap_or(false),
+            "analyze.contract must see the imported model and return findings"
+        );
     }
 
     #[test]
