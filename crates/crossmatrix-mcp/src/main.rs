@@ -16,7 +16,10 @@ type McpError = rmcp::ErrorData;
 
 #[derive(Clone, Default)]
 struct S {
-    model: Option<crossmatrix::Model>,
+    // Interior-mutable so a `&self` `crossmatrix.command` (import) can persist the
+    // loaded model for a later `crossmatrix.query` on the same MCP session. Cloning
+    // `S` (rmcp handler) shares the same cell via the `Arc`.
+    model: Arc<Mutex<Option<crossmatrix::Model>>>,
     request_cache: Arc<Mutex<HashMap<String, Result<Value, String>>>>,
 }
 
@@ -24,15 +27,18 @@ impl S {
     #[allow(dead_code)]
     fn new(model: crossmatrix::Model) -> Self {
         Self {
-            model: Some(model),
+            model: Arc::new(Mutex::new(Some(model))),
             request_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// The loaded model, or the recoverable "no model" diagnostic.
-    fn model(&self) -> Result<&crossmatrix::Model, String> {
+    /// The loaded model (cloned out of the shared cell), or the recoverable
+    /// "no model" diagnostic.
+    fn model(&self) -> Result<crossmatrix::Model, String> {
         self.model
-            .as_ref()
+            .lock()
+            .unwrap()
+            .clone()
             .ok_or_else(|| "no model loaded".to_string())
     }
 
@@ -140,10 +146,7 @@ impl S {
                     .unwrap_or("");
                 match kind {
                     "analyze.contract" => {
-                        let model = self
-                            .model
-                            .as_ref()
-                            .ok_or_else(|| "no model loaded".to_string())?;
+                        let model = self.model()?;
                         let mut all_findings: Vec<Value> = Vec::new();
                         for cid in model.contraction_ids() {
                             let findings = model.contract(cid);
@@ -160,10 +163,7 @@ impl S {
                         }))
                     }
                     "analyze.findings" => {
-                        let model = self
-                            .model
-                            .as_ref()
-                            .ok_or_else(|| "no model loaded".to_string())?;
+                        let model = self.model()?;
                         let findings: Vec<Value> = model
                             .findings()
                             .into_iter()
@@ -178,7 +178,7 @@ impl S {
                         }))
                     }
                     "validate" => {
-                        let validated = self.model.is_some();
+                        let validated = self.model.lock().unwrap().is_some();
                         Ok(json!({
                             "validated": validated,
                             "links": if validated {
