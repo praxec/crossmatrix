@@ -276,6 +276,34 @@ impl S {
                             "links": ["gaps.orphans", "coverage", "trace"]
                         }))
                     }
+                    "analyze.marginalize" => {
+                        // The genuine per-HOW weighted technical-importance rollup:
+                        // wraps the core Model::marginalize. Never agent-computed.
+                        let model = self.model()?;
+                        let relation = Self::str_param(&request, "relationId")?;
+                        let axis = match Self::str_param(&request, "axis")? {
+                            "from" => crossmatrix::Axis::From,
+                            "to" => crossmatrix::Axis::To,
+                            other => {
+                                return Err(format!(
+                                    "query.axis must be 'from' or 'to', got '{other}'"
+                                ));
+                            }
+                        };
+                        // The engine returns pairs already sorted descending; an
+                        // unweighted-member diagnostic is returned verbatim (fail-fast).
+                        let pairs = model
+                            .marginalize(relation, axis)
+                            .map_err(|e| format!("marginalize failed: {e}"))?;
+                        let findings: Vec<Value> = pairs
+                            .into_iter()
+                            .map(|(member, value)| json!({ "member": member, "value": value }))
+                            .collect();
+                        Ok(json!({
+                            "findings": findings,
+                            "links": ["analyze.contract", "analyze.findings", "validate", "describe"]
+                        }))
+                    }
                     "stale" => {
                         let model = self.model()?;
                         let stale: Vec<Value> = model
@@ -630,6 +658,28 @@ mod tests {
             result.pointer("/validated").and_then(|v| v.as_bool()),
             Some(true),
             "imported model must persist so a later query validates true"
+        );
+    }
+
+    #[test]
+    fn query_analyze_marginalize_returns_ranked_member_value_pairs() {
+        // Arrange: import the example model (no S::new preload).
+        let s = S::default();
+        let _ = import_example(&s);
+        // Act: the genuine per-HOW weighted rollup — roll up the WHAT axis of
+        // rel_req_char; survivors are the HOWs (dim_char).
+        let result = query(
+            &s,
+            json!({"kind": "analyze.marginalize", "relationId": "rel_req_char", "axis": "from"}),
+        )
+        .expect("analyze.marginalize must succeed");
+        // Assert: a non-empty array of {member, value} for the HOW axis.
+        let findings = result.pointer("/findings").and_then(|v| v.as_array());
+        assert!(
+            findings
+                .map(|a| !a.is_empty() && a.iter().all(|f| f.get("member").is_some() && f.get("value").is_some()))
+                .unwrap_or(false),
+            "analyze.marginalize must return non-empty {{member, value}} pairs"
         );
     }
 
