@@ -3,12 +3,13 @@ name = "crossmatrix"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "A sparse, configurable, N-dimensional weighted cross-reference engine (generalized House of Quality): observation-only, valence-by-separation, with fixed operations (marginalize / contract / findings) over typify-generated types."
+description = "A sparse, configurable, N-dimensional weighted cross-reference engine (generalized House of Quality): observation-only, valence-by-separation, with fixed operations (marginalize / contract / findings / tensions) over typify-generated types."
 readme = "README.md"
 keywords = ["house-of-quality", "qfd", "cross-reference", "sparse", "matrix"]
 categories = ["data-structures", "science", "mathematics"]
 documentation = "https://docs.rs/crossmatrix"
-# repository / homepage: set to the canonical git URL before publishing.
+repository = "https://github.com/praxec/crossmatrix"
+homepage = "https://github.com/praxec/crossmatrix"
 
 [dependencies]
 nalgebra = "0.35.0"
