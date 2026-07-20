@@ -4,10 +4,9 @@
 //! `knowledge-framework/schemas/crossmatrix.schema.json`).
 //!
 //! Implemented operations: `marginalize`, `contract`, `findings`
-//! (stale-reference), and the traceability queries (`describe`, `slice`,
-//! `trace`, `coverage`, `orphans`, `gaps_next`). Valence/tension (conflict)
-//! analysis is still to be implemented (see ADR 0002/0003 in
-//! `knowledge-framework/adr/`).
+//! (stale-reference + tension/conflict), `tensions` (valence-by-separation),
+//! and the traceability queries (`describe`, `slice`, `trace`, `coverage`,
+//! `orphans`, `gaps_next`). See ADR 0002/0003 in `adr/`.
 //!
 //! Invariants the full loader must enforce (ADR 0002): observation-only (no
 //! LLM numbers — already structural via the schema), valence-by-separation,
@@ -15,7 +14,7 @@
 //! source-traced + contentHash staleness, and the precondition that weighted
 //! analyses require resolvable member weights.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 mod raw {
     #![allow(clippy::all, dead_code)]
@@ -60,6 +59,14 @@ pub enum ValidationError {
         members: Vec<String>,
     },
 }
+
+/// A sparse contraction frontier: `(source, current endpoint)` -> the
+/// accumulated value plus the set of intermediate members traversed to reach it
+/// (the lineage that populates a [`Finding`]'s `path`).
+type ContractionFrontier = HashMap<(String, String), (f64, BTreeSet<String>)>;
+
+/// One drained [`ContractionFrontier`] entry, ready to rank.
+type ContractionEntry = ((String, String), (f64, BTreeSet<String>));
 
 /// A validated cross-matrix model. Construct only via [`Model::load`].
 #[derive(Debug, Clone)]
@@ -356,8 +363,9 @@ impl Model {
             })
             .unwrap_or_default();
 
-        // Build initial sparse matrix: (from, to) → max observation value.
-        let mut current: HashMap<(String, String), f64> = HashMap::new();
+        // Build initial sparse matrix: (from, to) → (max observation value, the
+        // set of intermediate members traversed to get there — empty at hop 1).
+        let mut current: ContractionFrontier = HashMap::new();
         for cell in &first_rel.cells {
             let max_val = cell
                 .observations
@@ -367,7 +375,10 @@ impl Model {
                 .copied()
                 .unwrap_or(0.0);
             if max_val > 0.0 {
-                current.insert((cell.from.clone(), cell.to.clone()), max_val);
+                current.insert(
+                    (cell.from.clone(), cell.to.clone()),
+                    (max_val, BTreeSet::new()),
+                );
             }
         }
 
@@ -387,8 +398,8 @@ impl Model {
                 })
                 .unwrap_or_default();
 
-            let mut next: HashMap<(String, String), f64> = HashMap::new();
-            for ((from, mid), val_a) in &current {
+            let mut next: ContractionFrontier = HashMap::new();
+            for ((from, mid), (val_a, seen)) in &current {
                 for cell in &rel.cells {
                     if &cell.from == mid {
                         let max_val_b = cell
@@ -409,8 +420,12 @@ impl Model {
                         };
 
                         let key = (from.clone(), cell.to.clone());
-                        let entry = next.entry(key).or_insert(0.0);
-                        *entry += combined;
+                        let entry = next.entry(key).or_insert((0.0, BTreeSet::new()));
+                        entry.0 += combined;
+                        // Paths that merge into the same endpoints are summed, so
+                        // the lineage is the UNION of every intermediate traversed.
+                        entry.1.extend(seen.iter().cloned());
+                        entry.1.insert(mid.clone());
                     }
                 }
             }
@@ -450,28 +465,75 @@ impl Model {
                 })
                 .unwrap_or_default();
 
-            let mut weighted: HashMap<(String, String), f64> = HashMap::new();
-            for ((from, to), val) in current.drain() {
+            let mut weighted: ContractionFrontier = HashMap::new();
+            for ((from, to), (val, seen)) in current.drain() {
                 let w = member_weights.get(from.as_str()).copied().unwrap_or(1.0);
-                weighted.insert((from, to), val * w);
+                weighted.insert((from, to), (val * w, seen));
             }
             current = weighted;
         }
 
-        // Sort by value descending (relative rank).
-        let mut entries: Vec<((String, String), f64)> = current.into_iter().collect();
-        entries.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Sort by value descending (relative rank), id-tiebroken for determinism.
+        let mut entries: Vec<ContractionEntry> = current.into_iter().collect();
+        entries.sort_by(|a, b| {
+            b.1.0
+                .partial_cmp(&a.1.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+
+        // A contraction produces a RANKING, so entries are `weighted_priority`
+        // at `info` — a high rank is the *good* case and must not read as an
+        // alarm. An entry is promoted to `critical_exposure`/`warn` only when it
+        // actually warrants attention: when the path it rides on touches a member
+        // that tension analysis reports as being in conflict. High priority
+        // resting on contested ground is the case worth surfacing.
+        let contested: HashSet<String> = self
+            .tensions()
+            .iter()
+            .filter(|f| matches!(f.kind, FindingKind::Conflict))
+            .flat_map(|f| f.members.iter().cloned())
+            .collect();
 
         entries
             .into_iter()
-            .map(|((from, to), value)| {
+            .map(|((from, to), (value, seen))| {
+                let mut path: Vec<String> = Vec::with_capacity(seen.len() + 2);
+                path.push(from.clone());
+                path.extend(seen.iter().cloned());
+                path.push(to.clone());
+
+                let hit: Vec<&String> = path.iter().filter(|m| contested.contains(*m)).collect();
+
+                let (kind, severity, explanation) = if hit.is_empty() {
+                    (
+                        "weighted_priority",
+                        "info",
+                        format!("contracted priority: {value:.2}"),
+                    )
+                } else {
+                    (
+                        "critical_exposure",
+                        "warn",
+                        format!(
+                            "contracted priority {value:.2}, but the path rests on contested \
+                             member(s): {}",
+                            hit.iter()
+                                .map(|m| m.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    )
+                };
+
                 serde_json::from_value(serde_json::json!({
-                    "kind": "critical_exposure",
-                    "severity": "warn",
+                    "kind": kind,
+                    "severity": severity,
                     "members": [from, to],
+                    "path": path,
                     "relation": contraction_id,
                     "net": value,
-                    "explanation": format!("contracted exposure: {:.2}", value)
+                    "explanation": explanation,
                 }))
                 .expect("Finding json must deserialize")
             })
@@ -502,7 +564,168 @@ impl Model {
             }
         }
 
+        findings.extend(self.tensions());
+
         findings
+    }
+
+    /// Valence-by-separation tension analysis (ADR 0002). For each member, the
+    /// **inbound** supporting and opposing forces are accumulated *separately*
+    /// and never folded into one signed scale, so strong support and strong
+    /// opposition cannot cancel into a misleading zero.
+    ///
+    /// `net` is `support - oppose` (relative rank, not a probability);
+    /// `tension` is `min(support, oppose)` — precisely the magnitude a bipolar
+    /// net-zero would have hidden.
+    ///
+    /// Contributions are normalised to each relation's own scale maximum before
+    /// being combined: a `9` on a 0..9 scale and a `9` on a 0..100 scale are not
+    /// commensurable, and a member is routinely acted on through relations that
+    /// use different scales. They are deliberately NOT importance-weighted —
+    /// this answers "what forces act on this member", not "what should I fix
+    /// first" (that is [`Model::gaps_next`]).
+    ///
+    /// Emits `conflict` (severity `block`) when opposition meets or exceeds
+    /// support, and `tension` (severity `warn`) when both are present but
+    /// support still dominates. Relation types carrying neither valence
+    /// (`derives_from`, `constrains`, `dependsOn`) are structural and skipped;
+    /// deprecated members and relations are excluded.
+    pub fn tensions(&self) -> Vec<Finding> {
+        #[derive(Default)]
+        struct Acc {
+            support: f64,
+            oppose: f64,
+            /// (label, normalised magnitude, is_oppose)
+            drivers: Vec<(String, f64, bool)>,
+        }
+
+        let deprecated: HashSet<&str> = self
+            .doc
+            .dimensions
+            .iter()
+            .flat_map(|d| d.members.iter())
+            .filter(|m| !member_active(m))
+            .map(|m| m.id.as_str())
+            .collect();
+
+        let mut acc: HashMap<&str, Acc> = HashMap::new();
+
+        for rel in self.doc.relations.iter().filter(|r| relation_active(r)) {
+            let Some(oppose) = relation_opposes(&rel.relation_type) else {
+                continue; // structural relation: no valence to separate
+            };
+            let (scale_map, scale_max) = self.scale_table(&rel.scale);
+            if scale_max <= 0.0 {
+                continue; // degenerate or unknown scale: nothing commensurable
+            }
+
+            for cell in &rel.cells {
+                if deprecated.contains(cell.from.as_str()) || deprecated.contains(cell.to.as_str())
+                {
+                    continue;
+                }
+                // Same multi-observation convention as `marginalize`: strongest wins.
+                let raw = cell
+                    .observations
+                    .iter()
+                    .filter_map(|o| scale_map.get(o.observation.as_str()))
+                    .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .copied()
+                    .unwrap_or(0.0);
+                if raw <= 0.0 {
+                    continue; // an explicit "no effect" is not a force
+                }
+
+                let norm = raw / scale_max;
+                let entry = acc.entry(cell.to.as_str()).or_default();
+                if oppose {
+                    entry.oppose += norm;
+                } else {
+                    entry.support += norm;
+                }
+                entry
+                    .drivers
+                    .push((format!("{}:{}", rel.id, cell.from), norm, oppose));
+            }
+        }
+
+        let mut out: Vec<(f64, String, Finding)> = Vec::new();
+
+        for (member, a) in acc {
+            if a.oppose <= 0.0 {
+                continue; // nothing opposing: not a tension, by definition
+            }
+
+            let tension = a.support.min(a.oppose);
+            let net = a.support - a.oppose;
+            // Opposition winning (or tying) is a conflict; opposition present but
+            // outweighed is a tension the user should still see.
+            let (kind, severity) = if net <= 0.0 {
+                ("conflict", "block")
+            } else {
+                ("tension", "warn")
+            };
+
+            // Minimal sensitivity: the drivers that actually move the number,
+            // opposing side first, each ranked by its own share.
+            let mut drivers = a.drivers;
+            drivers.sort_by(|x, y| {
+                y.2.cmp(&x.2)
+                    .then_with(|| y.1.partial_cmp(&x.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .then_with(|| x.0.cmp(&y.0))
+            });
+            let contributors: Vec<String> =
+                drivers.into_iter().map(|(label, _, _)| label).collect();
+
+            let explanation = format!(
+                "{member}: support {:.2} vs opposition {:.2} (net {net:+.2}, tension {tension:.2}) \
+                 — normalised across {} contributing cell(s)",
+                a.support,
+                a.oppose,
+                contributors.len()
+            );
+
+            let finding: Finding = serde_json::from_value(serde_json::json!({
+                "kind": kind,
+                "severity": severity,
+                "members": [member],
+                "path": [member],
+                "contributors": contributors,
+                "net": net,
+                "tension": tension,
+                "explanation": explanation,
+            }))
+            .expect("Finding json must deserialize");
+
+            out.push((tension, member.to_string(), finding));
+        }
+
+        // Deterministic: strongest hidden tension first, then member id.
+        out.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.cmp(&b.1))
+        });
+        out.into_iter().map(|(_, _, f)| f).collect()
+    }
+
+    /// A scale's `observation -> value` table plus its maximum level value
+    /// (the normalisation denominator). Empty/`0.0` when the scale is unknown.
+    fn scale_table(&self, scale_id: &str) -> (HashMap<&str, f64>, f64) {
+        let Some(scale) = self.doc.scales.iter().find(|s| s.id == scale_id) else {
+            return (HashMap::new(), 0.0);
+        };
+        let map: HashMap<&str, f64> = scale
+            .levels
+            .iter()
+            .map(|l| (l.observation.as_str(), l.value))
+            .collect();
+        let max = scale
+            .levels
+            .iter()
+            .map(|l| l.value)
+            .fold(f64::NEG_INFINITY, f64::max);
+        (map, if max.is_finite() { max } else { 0.0 })
     }
 
     // ── traceability queries (Vee / QFD House-of-Quality) ──
@@ -798,6 +1021,24 @@ fn member_active(m: &Member) -> bool {
 
 fn relation_active(r: &Relation) -> bool {
     !matches!(r.status, Some(raw::LifecycleStatus::Deprecated))
+}
+
+/// The valence of a relation type: `Some(false)` supporting, `Some(true)`
+/// opposing, `None` structural (carries no valence, so it takes no part in
+/// tension analysis). Kept exhaustive on purpose — a new `RelationType` in the
+/// schema must fail to compile here rather than silently default to structural.
+fn relation_opposes(rt: &raw::RelationType) -> Option<bool> {
+    use raw::RelationType as R;
+    match rt {
+        R::Satisfies | R::Supports | R::Implements | R::Verifies | R::Covers | R::Mitigates => {
+            Some(false)
+        }
+        R::Undermines | R::Opposes | R::Blocks | R::Exposes => Some(true),
+        // `constrains` bounds a member rather than arguing against it, and
+        // `derives_from`/`dependsOn` are pure structure (the latter routes to
+        // cyclic/SCC analysis, not valence).
+        R::DerivesFrom | R::Constrains | R::DependsOn => None,
+    }
 }
 
 /// Direction of a [`TraceHop`] relative to the traced member.
@@ -1166,6 +1407,173 @@ mod tests {
                 .iter()
                 .any(|f| matches!(f.kind, FindingKind::StaleReference)),
             "expected at least one stale_reference finding from sources with contentHashes"
+        );
+    }
+
+    // ── valence-by-separation / tension analysis ──
+
+    /// Arrange: `x` is acted on by one supporting and one opposing relation,
+    /// each on its own scale, so the cross-scale normalisation is exercised too.
+    /// `sup`/`opp` are observation tokens; "none" means no cell on that side.
+    fn valenced(sup: &str, opp: &str) -> Model {
+        // "absent" = no cell at all; "none" = a real cell holding the zero token.
+        let cell = |tok: &str| match tok {
+            "absent" => String::new(),
+            t => format!(r#"{{"from":"a","to":"x","observations":[{{"observation":"{t}"}}]}}"#),
+        };
+        let json = format!(
+            r#"{{"schemaVersion":"0.2.0","modelId":"valenced",
+              "dimensions":[
+                {{"id":"d1","order":0,"members":[{{"id":"a"}}]}},
+                {{"id":"d2","order":1,"members":[{{"id":"x"}}]}}
+              ],
+              "scales":[
+                {{"id":"s9","levels":[
+                  {{"observation":"none","value":0,"order":0}},
+                  {{"observation":"weak","value":1,"order":1}},
+                  {{"observation":"strong","value":9,"order":2}}]}},
+                {{"id":"s100","levels":[
+                  {{"observation":"none","value":0,"order":0}},
+                  {{"observation":"weak","value":10,"order":1}},
+                  {{"observation":"strong","value":100,"order":2}}]}}
+              ],
+              "relations":[
+                {{"id":"r_sup","from":"d1","to":"d2","relationType":"supports",
+                  "scale":"s9","cells":[{}]}},
+                {{"id":"r_opp","from":"d1","to":"d2","relationType":"undermines",
+                  "scale":"s100","cells":[{}]}}
+              ]}}"#,
+            cell(sup),
+            cell(opp)
+        );
+        Model::load(&json).expect("valenced fixture must load")
+    }
+
+    #[test]
+    fn support_without_opposition_is_not_a_tension() {
+        assert!(valenced("strong", "absent").tensions().is_empty());
+    }
+
+    #[test]
+    fn equal_support_and_opposition_do_not_cancel_to_nothing() {
+        // The core invariant: bipolar netting would hide this entirely.
+        assert_eq!(valenced("strong", "strong").tensions().len(), 1);
+    }
+
+    #[test]
+    fn equal_support_and_opposition_report_the_hidden_magnitude() {
+        let t = &valenced("strong", "strong").tensions()[0];
+        assert_eq!(t.tension, Some(1.0));
+    }
+
+    #[test]
+    fn opposition_meeting_support_is_a_conflict_not_a_tension() {
+        let t = &valenced("strong", "strong").tensions()[0];
+        assert!(matches!(t.kind, FindingKind::Conflict));
+    }
+
+    #[test]
+    fn outweighed_opposition_is_a_tension() {
+        let t = &valenced("strong", "weak").tensions()[0];
+        assert!(matches!(t.kind, FindingKind::Tension));
+    }
+
+    #[test]
+    fn conflict_is_severity_block() {
+        let t = &valenced("weak", "strong").tensions()[0];
+        assert!(matches!(t.severity, raw::FindingSeverity::Block));
+    }
+
+    #[test]
+    fn contributions_are_normalised_across_differing_scale_maxima() {
+        // support "strong" = 9/9 = 1.0; opposition "weak" = 10/100 = 0.1.
+        // Un-normalised these would read 9 vs 10 and invert the verdict.
+        let t = &valenced("strong", "weak").tensions()[0];
+        assert_eq!(t.net, Some(0.9));
+    }
+
+    #[test]
+    fn opposing_drivers_are_listed_first_for_minimal_sensitivity() {
+        let t = &valenced("strong", "strong").tensions()[0];
+        assert_eq!(t.contributors.first().map(String::as_str), Some("r_opp:a"));
+    }
+
+    #[test]
+    fn an_explicit_zero_observation_is_not_a_force() {
+        // A recorded "no effect" is data, not opposition.
+        assert!(valenced("strong", "none").tensions().is_empty());
+    }
+
+    #[test]
+    fn structural_relations_carry_no_valence() {
+        assert_eq!(relation_opposes(&raw::RelationType::DependsOn), None);
+    }
+
+    // ── contraction result semantics ──
+
+    /// Arrange: a two-hop chain `a -> m -> z`. When `contested` is set, `m` is
+    /// also strongly undermined, so tension analysis reports it in conflict and
+    /// the chain's ranking rides on contested ground.
+    fn chained(contested: bool) -> Model {
+        let opp = if contested {
+            r#",{"id":"r_opp","from":"d1","to":"d2","relationType":"undermines","scale":"s9",
+                 "cells":[{"from":"a","to":"m","observations":[{"observation":"strong"}]}]}"#
+        } else {
+            ""
+        };
+        let json = format!(
+            r#"{{"schemaVersion":"0.2.0","modelId":"chained",
+              "dimensions":[
+                {{"id":"d1","order":0,"members":[{{"id":"a"}}]}},
+                {{"id":"d2","order":1,"members":[{{"id":"m"}}]}},
+                {{"id":"d3","order":2,"members":[{{"id":"z"}}]}}
+              ],
+              "scales":[{{"id":"s9","levels":[
+                {{"observation":"none","value":0,"order":0}},
+                {{"observation":"strong","value":9,"order":1}}]}}],
+              "relations":[
+                {{"id":"r1","from":"d1","to":"d2","relationType":"supports","scale":"s9",
+                  "cells":[{{"from":"a","to":"m","observations":[{{"observation":"strong"}}]}}]}},
+                {{"id":"r2","from":"d2","to":"d3","relationType":"supports","scale":"s9",
+                  "cells":[{{"from":"m","to":"z","observations":[{{"observation":"strong"}}]}}]}}
+                {opp}
+              ],
+              "contractions":[{{"id":"c1","chain":["r1","r2"],"weightCombination":"min"}}]}}"#
+        );
+        Model::load(&json).expect("chained fixture must load")
+    }
+
+    #[test]
+    fn a_clean_ranking_is_priority_not_an_alarm() {
+        let f = &chained(false).contract("c1")[0];
+        assert!(matches!(f.kind, FindingKind::WeightedPriority));
+    }
+
+    #[test]
+    fn a_clean_ranking_is_severity_info() {
+        let f = &chained(false).contract("c1")[0];
+        assert!(matches!(f.severity, raw::FindingSeverity::Info));
+    }
+
+    #[test]
+    fn a_ranking_resting_on_a_contested_member_is_a_critical_exposure() {
+        let f = &chained(true).contract("c1")[0];
+        assert!(matches!(f.kind, FindingKind::CriticalExposure));
+    }
+
+    #[test]
+    fn contraction_path_records_the_traversed_intermediate() {
+        let f = &chained(false).contract("c1")[0];
+        assert_eq!(f.path, vec!["a", "m", "z"]);
+    }
+
+    #[test]
+    fn tensions_are_reported_through_findings() {
+        assert!(
+            valenced("strong", "strong")
+                .findings()
+                .iter()
+                .any(|f| matches!(f.kind, FindingKind::Conflict))
         );
     }
 }
