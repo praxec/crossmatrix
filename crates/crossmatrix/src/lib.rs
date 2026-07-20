@@ -14,7 +14,7 @@
 //! source-traced + contentHash staleness, and the precondition that weighted
 //! analyses require resolvable member weights.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 mod raw {
     #![allow(clippy::all, dead_code)]
@@ -355,8 +355,9 @@ impl Model {
             })
             .unwrap_or_default();
 
-        // Build initial sparse matrix: (from, to) → max observation value.
-        let mut current: HashMap<(String, String), f64> = HashMap::new();
+        // Build initial sparse matrix: (from, to) → (max observation value, the
+        // set of intermediate members traversed to get there — empty at hop 1).
+        let mut current: HashMap<(String, String), (f64, BTreeSet<String>)> = HashMap::new();
         for cell in &first_rel.cells {
             let max_val = cell
                 .observations
@@ -366,7 +367,10 @@ impl Model {
                 .copied()
                 .unwrap_or(0.0);
             if max_val > 0.0 {
-                current.insert((cell.from.clone(), cell.to.clone()), max_val);
+                current.insert(
+                    (cell.from.clone(), cell.to.clone()),
+                    (max_val, BTreeSet::new()),
+                );
             }
         }
 
@@ -386,8 +390,8 @@ impl Model {
                 })
                 .unwrap_or_default();
 
-            let mut next: HashMap<(String, String), f64> = HashMap::new();
-            for ((from, mid), val_a) in &current {
+            let mut next: HashMap<(String, String), (f64, BTreeSet<String>)> = HashMap::new();
+            for ((from, mid), (val_a, seen)) in &current {
                 for cell in &rel.cells {
                     if &cell.from == mid {
                         let max_val_b = cell
@@ -408,8 +412,12 @@ impl Model {
                         };
 
                         let key = (from.clone(), cell.to.clone());
-                        let entry = next.entry(key).or_insert(0.0);
-                        *entry += combined;
+                        let entry = next.entry(key).or_insert((0.0, BTreeSet::new()));
+                        entry.0 += combined;
+                        // Paths that merge into the same endpoints are summed, so
+                        // the lineage is the UNION of every intermediate traversed.
+                        entry.1.extend(seen.iter().cloned());
+                        entry.1.insert(mid.clone());
                     }
                 }
             }
@@ -449,28 +457,76 @@ impl Model {
                 })
                 .unwrap_or_default();
 
-            let mut weighted: HashMap<(String, String), f64> = HashMap::new();
-            for ((from, to), val) in current.drain() {
+            let mut weighted: HashMap<(String, String), (f64, BTreeSet<String>)> = HashMap::new();
+            for ((from, to), (val, seen)) in current.drain() {
                 let w = member_weights.get(from.as_str()).copied().unwrap_or(1.0);
-                weighted.insert((from, to), val * w);
+                weighted.insert((from, to), (val * w, seen));
             }
             current = weighted;
         }
 
-        // Sort by value descending (relative rank).
-        let mut entries: Vec<((String, String), f64)> = current.into_iter().collect();
-        entries.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Sort by value descending (relative rank), id-tiebroken for determinism.
+        let mut entries: Vec<((String, String), (f64, BTreeSet<String>))> =
+            current.into_iter().collect();
+        entries.sort_by(|a, b| {
+            b.1.0
+                .partial_cmp(&a.1.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+
+        // A contraction produces a RANKING, so entries are `weighted_priority`
+        // at `info` — a high rank is the *good* case and must not read as an
+        // alarm. An entry is promoted to `critical_exposure`/`warn` only when it
+        // actually warrants attention: when the path it rides on touches a member
+        // that tension analysis reports as being in conflict. High priority
+        // resting on contested ground is the case worth surfacing.
+        let contested: HashSet<String> = self
+            .tensions()
+            .iter()
+            .filter(|f| matches!(f.kind, FindingKind::Conflict))
+            .flat_map(|f| f.members.iter().cloned())
+            .collect();
 
         entries
             .into_iter()
-            .map(|((from, to), value)| {
+            .map(|((from, to), (value, seen))| {
+                let mut path: Vec<String> = Vec::with_capacity(seen.len() + 2);
+                path.push(from.clone());
+                path.extend(seen.iter().cloned());
+                path.push(to.clone());
+
+                let hit: Vec<&String> = path.iter().filter(|m| contested.contains(*m)).collect();
+
+                let (kind, severity, explanation) = if hit.is_empty() {
+                    (
+                        "weighted_priority",
+                        "info",
+                        format!("contracted priority: {value:.2}"),
+                    )
+                } else {
+                    (
+                        "critical_exposure",
+                        "warn",
+                        format!(
+                            "contracted priority {value:.2}, but the path rests on contested \
+                             member(s): {}",
+                            hit.iter()
+                                .map(|m| m.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    )
+                };
+
                 serde_json::from_value(serde_json::json!({
-                    "kind": "critical_exposure",
-                    "severity": "warn",
+                    "kind": kind,
+                    "severity": severity,
                     "members": [from, to],
+                    "path": path,
                     "relation": contraction_id,
                     "net": value,
-                    "explanation": format!("contracted exposure: {:.2}", value)
+                    "explanation": explanation,
                 }))
                 .expect("Finding json must deserialize")
             })
@@ -1444,6 +1500,64 @@ mod tests {
     #[test]
     fn structural_relations_carry_no_valence() {
         assert_eq!(relation_opposes(&raw::RelationType::DependsOn), None);
+    }
+
+    // ── contraction result semantics ──
+
+    /// Arrange: a two-hop chain `a -> m -> z`. When `contested` is set, `m` is
+    /// also strongly undermined, so tension analysis reports it in conflict and
+    /// the chain's ranking rides on contested ground.
+    fn chained(contested: bool) -> Model {
+        let opp = if contested {
+            r#",{"id":"r_opp","from":"d1","to":"d2","relationType":"undermines","scale":"s9",
+                 "cells":[{"from":"a","to":"m","observations":[{"observation":"strong"}]}]}"#
+        } else {
+            ""
+        };
+        let json = format!(
+            r#"{{"schemaVersion":"0.2.0","modelId":"chained",
+              "dimensions":[
+                {{"id":"d1","order":0,"members":[{{"id":"a"}}]}},
+                {{"id":"d2","order":1,"members":[{{"id":"m"}}]}},
+                {{"id":"d3","order":2,"members":[{{"id":"z"}}]}}
+              ],
+              "scales":[{{"id":"s9","levels":[
+                {{"observation":"none","value":0,"order":0}},
+                {{"observation":"strong","value":9,"order":1}}]}}],
+              "relations":[
+                {{"id":"r1","from":"d1","to":"d2","relationType":"supports","scale":"s9",
+                  "cells":[{{"from":"a","to":"m","observations":[{{"observation":"strong"}}]}}]}},
+                {{"id":"r2","from":"d2","to":"d3","relationType":"supports","scale":"s9",
+                  "cells":[{{"from":"m","to":"z","observations":[{{"observation":"strong"}}]}}]}}
+                {opp}
+              ],
+              "contractions":[{{"id":"c1","chain":["r1","r2"],"weightCombination":"min"}}]}}"#
+        );
+        Model::load(&json).expect("chained fixture must load")
+    }
+
+    #[test]
+    fn a_clean_ranking_is_priority_not_an_alarm() {
+        let f = &chained(false).contract("c1")[0];
+        assert!(matches!(f.kind, FindingKind::WeightedPriority));
+    }
+
+    #[test]
+    fn a_clean_ranking_is_severity_info() {
+        let f = &chained(false).contract("c1")[0];
+        assert!(matches!(f.severity, raw::FindingSeverity::Info));
+    }
+
+    #[test]
+    fn a_ranking_resting_on_a_contested_member_is_a_critical_exposure() {
+        let f = &chained(true).contract("c1")[0];
+        assert!(matches!(f.kind, FindingKind::CriticalExposure));
+    }
+
+    #[test]
+    fn contraction_path_records_the_traversed_intermediate() {
+        let f = &chained(false).contract("c1")[0];
+        assert_eq!(f.path, vec!["a", "m", "z"]);
     }
 
     #[test]
