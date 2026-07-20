@@ -60,6 +60,14 @@ pub enum ValidationError {
     },
 }
 
+/// A sparse contraction frontier: `(source, current endpoint)` -> the
+/// accumulated value plus the set of intermediate members traversed to reach it
+/// (the lineage that populates a [`Finding`]'s `path`).
+type ContractionFrontier = HashMap<(String, String), (f64, BTreeSet<String>)>;
+
+/// One drained [`ContractionFrontier`] entry, ready to rank.
+type ContractionEntry = ((String, String), (f64, BTreeSet<String>));
+
 /// A validated cross-matrix model. Construct only via [`Model::load`].
 #[derive(Debug, Clone)]
 pub struct Model {
@@ -357,7 +365,7 @@ impl Model {
 
         // Build initial sparse matrix: (from, to) → (max observation value, the
         // set of intermediate members traversed to get there — empty at hop 1).
-        let mut current: HashMap<(String, String), (f64, BTreeSet<String>)> = HashMap::new();
+        let mut current: ContractionFrontier = HashMap::new();
         for cell in &first_rel.cells {
             let max_val = cell
                 .observations
@@ -390,7 +398,7 @@ impl Model {
                 })
                 .unwrap_or_default();
 
-            let mut next: HashMap<(String, String), (f64, BTreeSet<String>)> = HashMap::new();
+            let mut next: ContractionFrontier = HashMap::new();
             for ((from, mid), (val_a, seen)) in &current {
                 for cell in &rel.cells {
                     if &cell.from == mid {
@@ -457,7 +465,7 @@ impl Model {
                 })
                 .unwrap_or_default();
 
-            let mut weighted: HashMap<(String, String), (f64, BTreeSet<String>)> = HashMap::new();
+            let mut weighted: ContractionFrontier = HashMap::new();
             for ((from, to), (val, seen)) in current.drain() {
                 let w = member_weights.get(from.as_str()).copied().unwrap_or(1.0);
                 weighted.insert((from, to), (val * w, seen));
@@ -466,8 +474,7 @@ impl Model {
         }
 
         // Sort by value descending (relative rank), id-tiebroken for determinism.
-        let mut entries: Vec<((String, String), (f64, BTreeSet<String>))> =
-            current.into_iter().collect();
+        let mut entries: Vec<ContractionEntry> = current.into_iter().collect();
         entries.sort_by(|a, b| {
             b.1.0
                 .partial_cmp(&a.1.0)
