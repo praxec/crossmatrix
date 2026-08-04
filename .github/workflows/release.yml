@@ -39,6 +39,7 @@ jobs:
           bin: crossmatrix-mcp
           target: ${{ matrix.target }}
           archive: crossmatrix-mcp-${{ matrix.target }}
+          checksum: sha256
           token: ${{ secrets.GITHUB_TOKEN }}
 
   image:
