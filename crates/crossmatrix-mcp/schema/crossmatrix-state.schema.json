@@ -61,6 +61,7 @@
       "additionalProperties": false,
       "properties": {
         "observation": { "type": "string" },
+        "status": { "$ref": "#/$defs/ObservationStatus" },
         "measuredValue": { "type": "number" },
         "provenanceClass": { "$ref": "#/$defs/ProvenanceClass" },
         "confidence": { "$ref": "#/$defs/Confidence" },
@@ -69,6 +70,7 @@
         "rationale": { "type": "string" }
       }
     },
+    "ObservationStatus": { "type": "string", "enum": ["active", "proposed"], "default": "active", "description": "`proposed` = a suggestion (e.g. from a classifier) recorded for review. Proposed observations are kept in the document but excluded from every analysis until someone confirms the cell with an ordinary (active) observation." },
     "StateCell": {
       "type": "object",
       "description": "A non-empty tie holding a SET of source-stamped observations, tagged with the relation + member ids it belongs to (the cells the engine schema nests inside a relation, here keyed by `relationId`).",

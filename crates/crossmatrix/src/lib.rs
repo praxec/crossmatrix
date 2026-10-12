@@ -23,6 +23,7 @@ mod raw {
     typify::import_types!(
         schema = "schema/crossmatrix.schema.json",
         replace = { DimensionKind = String },
+        derives = [PartialEq],
     );
 }
 
@@ -83,6 +84,11 @@ type ContractionEntry = ((String, String), (f64, BTreeSet<String>));
 /// A validated cross-matrix model. Construct only via [`Model::load`].
 #[derive(Debug, Clone)]
 pub struct Model {
+    /// The FULL validated document (including proposed observations). Persisted
+    /// and exported verbatim by [`Model::doc`] so proposals round-trip.
+    full: CrossMatrixModel,
+    /// The EFFECTIVE analysis view: proposed observations removed and any cell
+    /// left with no observation dropped. Every analysis reads this field.
     doc: CrossMatrixModel,
     /// dimension id -> set of member ids (built once at load).
     members_by_dim: HashMap<String, HashSet<String>>,
@@ -249,10 +255,14 @@ impl Model {
             }
         }
 
+        // Effective analysis view: proposed observations removed, observation-less
+        // cells dropped. Validation above still ran against the FULL document.
+        let effective = effective_view(&doc);
+
         // Active hierarchy index for `ancestors`/`rolled_up`. Presence of a
         // dimension key marks an active hierarchy on it (even with zero cells).
         let mut hierarchy: HashMap<String, HashMap<String, Vec<(String, String)>>> = HashMap::new();
-        for r in doc.relations.iter().filter(|r| relation_active(r)) {
+        for r in effective.relations.iter().filter(|r| relation_active(r)) {
             if r.relation_type != raw::RelationType::Contains {
                 continue;
             }
@@ -268,7 +278,8 @@ impl Model {
         }
 
         Ok(Model {
-            doc,
+            full: doc,
+            doc: effective,
             members_by_dim,
             dim_of,
             active_members,
@@ -276,9 +287,11 @@ impl Model {
         })
     }
 
-    /// The underlying, validated document.
+    /// The FULL validated document, including proposed observations. Persistence
+    /// and export must round-trip proposals, so this is not the analysis view.
+    #[allow(clippy::misnamed_getters)] // `doc` is the analysis field; `full` is the document.
     pub fn doc(&self) -> &CrossMatrixModel {
-        &self.doc
+        &self.full
     }
 
     /// The declared observation→value scales.
@@ -292,6 +305,31 @@ impl Model {
     pub fn relations(&self) -> &[Relation] {
         &self.doc.relations
     }
+
+    /// Every proposed observation, in relation/cell order, as a review worklist.
+    /// Deprecated relations are excluded; `relation_id` narrows to one relation.
+    pub fn proposals(&self, relation_id: Option<&str>) -> Vec<Proposal> {
+        let mut out = Vec::new();
+        for rel in self.full.relations.iter().filter(|r| relation_active(r)) {
+            if relation_id.is_some_and(|id| id != rel.id) {
+                continue;
+            }
+            for cell in &rel.cells {
+                for observation in &cell.observations {
+                    if is_proposed(observation) {
+                        out.push(Proposal {
+                            relation_id: rel.id.clone(),
+                            from: cell.from.clone(),
+                            to: cell.to.clone(),
+                            observation: observation.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn contraction_ids(&self) -> Vec<&str> {
         self.doc
             .contractions
@@ -894,8 +932,9 @@ impl Model {
             via: Vec<String>,
         }
 
-        let mut doc = self.doc.clone();
-        for rel in doc.relations.iter_mut() {
+        let mut out = self.full.clone();
+        let mut derived_by_relation: HashMap<String, Vec<Cell>> = HashMap::new();
+        for rel in self.doc.relations.iter() {
             if !relation_active(rel)
                 || rel.relation_type == raw::RelationType::Contains
                 || rel.from == rel.to
@@ -985,9 +1024,14 @@ impl Model {
                 })
                 .collect();
             derived.sort_by(|a, b| (&a.from, &a.to).cmp(&(&b.from, &b.to)));
-            rel.cells.extend(derived);
+            derived_by_relation.insert(rel.id.clone(), derived);
         }
-        Model::from_doc(doc).expect("rolled_up must produce a valid model")
+        for rel in out.relations.iter_mut() {
+            if let Some(derived) = derived_by_relation.remove(&rel.id) {
+                rel.cells.extend(derived);
+            }
+        }
+        Model::from_doc(out).expect("rolled_up must produce a valid model")
     }
 
     /// A scale's `observation -> (value, declared order)` ranking table.
@@ -1288,6 +1332,25 @@ fn relation_active(r: &Relation) -> bool {
     !matches!(r.status, Some(raw::LifecycleStatus::Deprecated))
 }
 
+/// A proposed observation is recorded for review and excluded from analyses.
+fn is_proposed(o: &Observation) -> bool {
+    matches!(o.status, Some(raw::ObservationStatus::Proposed))
+}
+
+/// The effective analysis view: drop proposed observations, then drop any cell
+/// that no longer holds an observation. Everything else (members, relations,
+/// proposals) is preserved.
+fn effective_view(doc: &CrossMatrixModel) -> CrossMatrixModel {
+    let mut out = doc.clone();
+    for rel in out.relations.iter_mut() {
+        for cell in rel.cells.iter_mut() {
+            cell.observations.retain(|o| !is_proposed(o));
+        }
+        rel.cells.retain(|c| !c.observations.is_empty());
+    }
+    out
+}
+
 /// The valence of a relation type: `Some(false)` supporting, `Some(true)`
 /// opposing, `None` structural (carries no valence, so it takes no part in
 /// tension analysis). Kept exhaustive on purpose — a new `RelationType` in the
@@ -1352,6 +1415,17 @@ fn find_cycle(adj: &BTreeMap<String, Vec<String>>) -> Option<Vec<String>> {
         }
     }
     None
+}
+
+/// A proposed observation awaiting review, paired with the relation and cell
+/// endpoints it was recorded against (see [`Model::proposals`]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Proposal {
+    pub relation_id: String,
+    pub from: String,
+    pub to: String,
+    pub observation: Observation,
 }
 
 /// Direction of a [`TraceHop`] relative to the traced member.

@@ -25,7 +25,8 @@
           "enum": [
             "llm",
             "human",
-            "system"
+            "system",
+            "classifier"
           ]
         },
         "persona": {
@@ -35,7 +36,8 @@
             "observer",
             "analyst",
             "reviewer",
-            "runtime_validator"
+            "runtime_validator",
+            "jev"
           ]
         }
       }
@@ -398,6 +400,15 @@
         },
         "rationale": {
           "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "proposed"
+          ],
+          "default": "active",
+          "description": "`proposed` = a suggestion (e.g. from a classifier) recorded for review. Proposed observations are kept in the document but excluded from every analysis until someone confirms the cell with an ordinary (active) observation."
         }
       }
     },

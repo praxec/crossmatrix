@@ -83,6 +83,7 @@
       "additionalProperties": false,
       "properties": {
         "observation": { "type": "string", "description": "Categorical token in the relation's scale (engine resolves to a value; rejects unknown tokens)." },
+        "status": { "$ref": "#/$defs/ObservationStatus" },
         "measuredValue": { "type": "number", "description": "MEASURED PATH: a value from a deterministic source, permitted ONLY with provenanceClass=observed + a sourceRef. Engine buckets it to a token via the scale's level `range`s. LLM never sets this." },
         "provenanceClass": { "$ref": "#/$defs/ProvenanceClass" },
         "confidence": { "$ref": "#/$defs/Confidence" },
@@ -91,6 +92,7 @@
         "rationale": { "type": "string" }
       }
     },
+    "ObservationStatus": { "type": "string", "enum": ["active", "proposed"], "default": "active", "description": "`proposed` = a suggestion (e.g. from a classifier) recorded for review. Proposed observations are kept in the document but excluded from every analysis until someone confirms the cell with an ordinary (active) observation." },
     "LifecycleStatus": { "type": "string", "enum": ["active", "deprecated"], "default": "active", "description": "Non-destructive lifecycle for auditable deprecation (append-only); deprecated elements are excluded from analyses." },
     "Member": {
       "type": "object", "required": ["id"], "additionalProperties": false,
