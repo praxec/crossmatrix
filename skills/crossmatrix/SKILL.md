@@ -92,6 +92,19 @@ Never ask for the whole model when a slice answers the question: `describe` (str
 `coverage`, `gaps.orphans`. Use `export` only to hand the model to another tool, and
 `report` for a human-readable House of Quality.
 
+## Large rosters, hierarchies and sources
+
+- Sync rosters straight from their source (files, tickets, tests) with a per-member
+  `sourceRef {"uri": "file://src/lib.rs", "hash": "sha256:..."}`. `members.sync` handles
+  10k+ members; re-sending an unchanged roster is a no-op (no new version).
+- Model nesting (directory contains file, epic contains story) as a `contains`
+  self-relation, parent → child. Add `rollup: true` to `trace`, `slice`, `coverage`,
+  `gaps.next` or `analyze.*` to roll leaf observations up to ancestors.
+- `trace {"member": "<id or uri>"}` and `slice {"relationId", "from"|"to": "<id or uri>"}`
+  work in both directions and page with `limit` / `cursor` (`nextCursor`).
+- `stale {"hashes": {"<uri>": "<hash>"}}` (or `"readFiles": true` for `file://` sources
+  inside the project) returns the changed members and every cell that rests on them.
+
 ## Changing your mind
 
 Never delete. `deprecate {targetId, reason, supersededBy?}` retires a member or relation;

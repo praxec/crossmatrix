@@ -4,6 +4,19 @@ Multidimensional **House of Quality (QFD)** — cross-dimensional relationship m
 
 ## Install
 
+### npm / npx (recommended for MCP clients)
+
+```sh
+npx -y @matthew-cochran/crossmatrix --version
+claude mcp add crossmatrix --scope user -- npx -y @matthew-cochran/crossmatrix
+```
+
+The `@matthew-cochran/crossmatrix` package is a small launcher: on first run it
+downloads the release binary for your platform, verifies it against the
+release's `checksums.sha256`, caches it, and runs it over stdio (signals are
+forwarded; stdout belongs to MCP). `CROSSMATRIX_MCP_BINARY` points it at a binary
+you installed yourself. The package also bundles the agent skills.
+
 ### Prebuilt binary (no Rust, Cargo, or Git required)
 
 ```sh
@@ -98,6 +111,8 @@ reports the resolved `root`.
 | `crossmatrix-mcp` | serve MCP on stdio |
 | `crossmatrix-mcp init [--dir D]` | create `D/.crossmatrix/` (idempotent) |
 | `crossmatrix-mcp check [--dir D]` | validate the store; exit 1 on any problem |
+| `crossmatrix-mcp skills install --target <t> (--project D \| --user) [--dry-run] [--force]` | install the bundled agent skills |
+| `crossmatrix-mcp skills uninstall --target <t> (--project D \| --user)` / `skills list` | remove / list installs |
 | `crossmatrix-mcp --version` / `--help` | version / usage |
 
 ## Tools
@@ -158,6 +173,34 @@ imports it into the session (in memory) for the queries that follow.
 - `stale {hashes?, readFiles?}` compares stored source hashes with current ones
   (`readFiles` hashes `file://` sources inside the project) and returns the
   changed members plus every cell that references them, paged.
+
+## Agent skills
+
+crossmatrix ships [Agent Skills](skills/) that teach an agent the method and
+common uses. Install them into a project (or `--user`) for one client or all:
+
+```sh
+npx -y @matthew-cochran/crossmatrix skills install --target claude --project .
+crossmatrix-mcp skills install --target all --project .      # .claude/skills + .agents/skills
+```
+
+Targets: `claude`, `codex`, `cursor`, `copilot`, `gemini`, `agents-md`, `all`. A
+`.crossmatrix-skills.json` manifest records file hashes, so re-installs update
+only files you have not edited (`--force` overwrites them) and `uninstall`
+removes only unmodified files. The installer never edits MCP configuration; it
+prints the registration command instead
+(`claude mcp add crossmatrix --scope user -- npx -y @matthew-cochran/crossmatrix`).
+
+| Skill | Use it for |
+|---|---|
+| `crossmatrix` | the method: Configuration / Dimensions / State, observation-only writes, the driver loop, scoped reads, `.crossmatrix/` |
+| `crossmatrix-hoq` | a classic House of Quality: weighted needs × characteristics, roof, technical importance, targets |
+| `crossmatrix-jtbd` | jobs to be done × user segments × journeys, joined by a contraction |
+| `crossmatrix-competitive` | needs × competitors benchmarking and gaps worth winning |
+| `crossmatrix-test-coverage` | requirements/journeys × tests; orphans are untested requirements |
+| `crossmatrix-risk` | failure modes × components/requirements (pairs with fmeca) |
+| `crossmatrix-prioritize` | deliverables × value drivers → a ranked list for a planner (pairs with cpm) |
+| `crossmatrix-review` | check, conflicts, stale, the report and a sign-off checklist |
 
 ## Using it with Praxec
 
