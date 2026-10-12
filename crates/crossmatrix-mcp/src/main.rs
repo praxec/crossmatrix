@@ -15,6 +15,14 @@ use serde_json::{Map, Value, json};
 use crossmatrix_mcp::repo::RootSource;
 use crossmatrix_mcp::session::{Rejection, Session};
 
+#[cfg(feature = "jev")]
+use crossmatrix_mcp::assist::AssistUnavailable;
+#[cfg(feature = "jev")]
+use crossmatrix_mcp::assist::jev::{HttpJudge, JevConfig, Judge};
+use crossmatrix_mcp::assist_rig::TextModel;
+#[cfg(feature = "rig")]
+use crossmatrix_mcp::assist_rig::{OpenRouterTextModel, RigUnavailable};
+
 type McpError = rmcp::ErrorData;
 
 /// The handler. The command engine (and its persisted/ephemeral state) lives in
@@ -23,11 +31,30 @@ type McpError = rmcp::ErrorData;
 #[derive(Clone)]
 struct S {
     session: Arc<Mutex<Session>>,
+    #[cfg(feature = "jev")]
+    judge: Option<Arc<dyn Judge>>,
+    #[cfg(feature = "jev")]
+    judge_unavailable: Option<AssistUnavailable>,
+    text_model: Option<Arc<dyn TextModel>>,
+    #[cfg(feature = "rig")]
+    text_unavailable: Option<RigUnavailable>,
 }
 
 impl Default for S {
     fn default() -> Self {
-        Self::with_session(Session::from_process())
+        #[allow(unused_mut)]
+        let mut server = Self::with_session(Session::from_process());
+        #[cfg(feature = "jev")]
+        match JevConfig::from_env() {
+            Ok(config) => server.judge = Some(Arc::new(HttpJudge::new(config))),
+            Err(error) => server.judge_unavailable = Some(error),
+        }
+        #[cfg(feature = "rig")]
+        match OpenRouterTextModel::from_env() {
+            Ok(model) => server.text_model = Some(Arc::new(model)),
+            Err(error) => server.text_unavailable = Some(error),
+        }
+        server
     }
 }
 
@@ -45,7 +72,88 @@ impl S {
     fn with_session(session: Session) -> Self {
         Self {
             session: Arc::new(Mutex::new(session)),
+            #[cfg(feature = "jev")]
+            judge: None,
+            #[cfg(feature = "jev")]
+            judge_unavailable: None,
+            text_model: None,
+            #[cfg(feature = "rig")]
+            text_unavailable: None,
         }
+    }
+
+    /// Test constructor: inject a judge without touching the environment.
+    #[cfg(feature = "jev")]
+    #[allow(dead_code)]
+    fn with_judge(mut self, judge: Arc<dyn Judge>) -> Self {
+        self.judge = Some(judge);
+        self.judge_unavailable = None;
+        self
+    }
+
+    /// Test constructor: inject a text model without touching the environment.
+    #[allow(dead_code)]
+    fn with_text_model(mut self, text_model: Arc<dyn TextModel>) -> Self {
+        self.text_model = Some(text_model);
+        #[cfg(feature = "rig")]
+        {
+            self.text_unavailable = None;
+        }
+        self
+    }
+
+    /// The specific startup reason when a compiled backend failed to build.
+    fn assist_override(&self, request: &Value) -> Option<Value> {
+        let kind = request.pointer("/query/kind").and_then(Value::as_str)?;
+        match kind {
+            "assist.suggest" => {
+                self.judge_unavailable_value(&["observe", "proposals", "assist.suggest"])
+            }
+            "gaps.next"
+                if request.pointer("/query/rankBy").and_then(Value::as_str)
+                    == Some("uncertainty") =>
+            {
+                self.judge_unavailable_value(&[
+                    "gaps.orphans",
+                    "coverage",
+                    "trace",
+                    "assist.suggest",
+                ])
+            }
+            "assist.members" => self.text_unavailable_value(&["member.propose", "members.sync"]),
+            "assist.narrative" => self.text_unavailable_value(&["report", "analyze.findings"]),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "jev")]
+    fn judge_unavailable_value(&self, links: &[&str]) -> Option<Value> {
+        if self.judge.is_some() {
+            return None;
+        }
+        self.judge_unavailable
+            .as_ref()
+            .map(|error| error.to_value(links))
+    }
+
+    #[cfg(not(feature = "jev"))]
+    fn judge_unavailable_value(&self, _links: &[&str]) -> Option<Value> {
+        None
+    }
+
+    #[cfg(feature = "rig")]
+    fn text_unavailable_value(&self, links: &[&str]) -> Option<Value> {
+        if self.text_model.is_some() {
+            return None;
+        }
+        self.text_unavailable
+            .as_ref()
+            .map(|error| error.to_value(links))
+    }
+
+    #[cfg(not(feature = "rig"))]
+    fn text_unavailable_value(&self, _links: &[&str]) -> Option<Value> {
+        None
     }
 
     fn bad_request(message: impl Into<String>) -> Rejection {
@@ -77,11 +185,15 @@ impl S {
             Self::make_tool(
                 "crossmatrix.query",
                 "Read / analysis (engine-computed, never mutating). query{kind,...}: model.status, \
-                 slice, describe, trace, explain, gaps.next, gaps.orphans, coverage, stale, \
-                 conflicts, report, export, analyze.marginalize, analyze.contract, \
-                 analyze.findings, validate. Optional rollup: true runs analyses over the derived \
-                 rolled-up model; slice/trace/stale accept member-id or sourceRef uri lookups and \
-                 limit/cursor paging (trace direction in|out|both). Reads are scoped slices.",
+                 slice, describe, trace, explain, gaps.next (rankBy: 'uncertainty' for a Jev-ranked \
+                 next-cell list), gaps.orphans, coverage, stale, conflicts, report (narrative: true \
+                 appends an LLM narrative), export, analyze.marginalize, analyze.contract, \
+                 analyze.findings, proposals, validate, assist.suggest, assist.members, \
+                 assist.narrative. Optional rollup: true runs analyses over the derived rolled-up \
+                 model; slice/trace/stale accept member-id or sourceRef uri lookups and limit/cursor \
+                 paging (trace direction in|out|both). AI assist is opt-in: \
+                 CROSSMATRIX_ASSIST=jev,rig plus TYPESAFE_JEV_API_KEY or OPENROUTER_API_KEY. Reads \
+                 are scoped slices.",
                 json!({ "type": "object", "properties": { "request": { "type": "object" } }, "required": ["request"] }),
             ),
         ]
@@ -107,9 +219,12 @@ impl ServerHandler for S {
             "crossmatrix-mcp: a sparse N-dimensional weighted cross-reference engine.\n\
              Tools: crossmatrix.command (writes, observation-only) and crossmatrix.query \
              (reads/analyses: model.status, slice, trace (member-id or sourceRef uri lookups; \
-             direction, rollup, limit/cursor paging), describe, explain, gaps.next, gaps.orphans, \
-             coverage, stale (hashes/readFiles, paging), conflicts, report, export, \
-             analyze.marginalize, analyze.contract, analyze.findings, validate)."
+             direction, rollup, limit/cursor paging), describe, explain, gaps.next (rankBy: \
+             'uncertainty'), gaps.orphans, coverage, stale (hashes/readFiles, paging), \
+             conflicts, report (narrative: true), export, analyze.marginalize, \
+             analyze.contract, analyze.findings, proposals, validate, assist.suggest, \
+             assist.members, assist.narrative). AI assist is opt-in: CROSSMATRIX_ASSIST=jev,rig \
+             plus TYPESAFE_JEV_API_KEY or OPENROUTER_API_KEY."
                 .to_string(),
         );
         result
@@ -133,7 +248,32 @@ impl ServerHandler for S {
             .arguments
             .map(Value::Object)
             .unwrap_or_else(|| Value::Object(Default::default()));
-        match self.call_tool_impl(req.name.as_ref(), args) {
+        let result = if req.name.as_ref() == "crossmatrix.query" {
+            let request = args.get("request").cloned().unwrap_or(Value::Null);
+            match self.assist_override(&request) {
+                Some(value) => Ok(value),
+                None => {
+                    #[cfg(feature = "jev")]
+                    let judge = self.judge.as_deref();
+                    #[cfg(not(feature = "jev"))]
+                    let judge = None;
+                    match crossmatrix_mcp::assist_dispatch::query(
+                        &self.session,
+                        judge,
+                        self.text_model.as_deref(),
+                        &request,
+                    )
+                    .await
+                    {
+                        Some(result) => result,
+                        None => self.call_tool_impl(req.name.as_ref(), args),
+                    }
+                }
+            }
+        } else {
+            self.call_tool_impl(req.name.as_ref(), args)
+        };
+        match result {
             Ok(value) => {
                 let text = serde_json::to_string_pretty(&value).unwrap_or_default();
                 let mut r = CallToolResult::success(vec![Content::text(text)]);

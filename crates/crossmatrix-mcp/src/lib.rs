@@ -12,6 +12,7 @@ pub mod skills;
 pub mod store;
 
 pub mod assist;
+pub mod assist_dispatch;
 
 use crate::store::ConfigStore;
 use crate::store::DimensionsStore;

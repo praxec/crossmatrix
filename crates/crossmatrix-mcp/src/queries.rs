@@ -239,6 +239,15 @@ pub fn query(session: &Session, request: &Value) -> Result<Value, Rejection> {
             })
         }
 
+        "proposals" => with_model(session, false, |model| {
+            let relation = opt_str(request, "relationId");
+            let proposals = serialize_items(model.proposals(relation))?;
+            Ok(json!({
+                "proposals": proposals,
+                "links": ["observe", "assist.suggest"],
+            }))
+        }),
+
         "validate" => {
             let validated = session.model().is_some();
             Ok(json!({

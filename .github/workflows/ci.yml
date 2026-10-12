@@ -40,6 +40,9 @@ jobs:
       - name: Test
         run: cargo test --all
 
+      - name: Test (all features)
+        run: cargo test --workspace --all-features
+
   npm:
     name: npm launcher (${{ matrix.os }})
     strategy:
