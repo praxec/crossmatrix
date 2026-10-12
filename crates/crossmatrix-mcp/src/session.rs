@@ -123,6 +123,24 @@ impl Session {
         self.model.as_ref()
     }
 
+    /// The store root this session reads/writes (e.g. `<project>/.crossmatrix`).
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
+    /// The default report title: the persisted configuration's `label`, else its
+    /// `aspect`; `None` for an ephemeral (imported) model.
+    pub fn config_default_title(&self) -> Option<String> {
+        match &self.backing {
+            Backing::Persisted(docs) => docs
+                .config
+                .label
+                .clone()
+                .or_else(|| Some(docs.config.aspect.clone())),
+            Backing::Ephemeral => None,
+        }
+    }
+
     /// The non-mutating `model.status` body (shared by the command op and the
     /// `model.status` query).
     pub fn status(&self) -> Value {
@@ -691,8 +709,37 @@ impl Session {
         };
 
         let before = self.revision;
-        let after = before + 1;
         let persisted = matches!(self.backing, Backing::Persisted { .. });
+
+        // A write that changes nothing is a NO-OP: no revision bump, no file
+        // writes, no audit line. `members.sync` is authoritative via its
+        // summary; every other write is compared by resulting document.
+        let noop = match &sync {
+            Some(sync) => sync.is_noop(),
+            None => {
+                serde_json::to_value(new_model.doc()).ok() == serde_json::to_value(model.doc()).ok()
+            }
+        };
+        if noop {
+            let model_id = new_model.doc().model_id.clone();
+            self.model = Some(new_model);
+            let mut response = json!({
+                "ok": true,
+                "op": kind,
+                "modelId": model_id,
+                "version": before,
+                "persisted": persisted,
+                "noop": true,
+                "summary": summary,
+                "links": success_links(kind),
+            });
+            if let Some(sync) = sync {
+                response["sync"] = serde_json::to_value(&sync).unwrap_or(Value::Null);
+            }
+            return Ok(response);
+        }
+
+        let after = before + 1;
 
         if persisted {
             let mut next_backing = None;
@@ -712,8 +759,25 @@ impl Session {
                 let config_store = ConfigStore::new(self.root.clone());
                 let dims_store = DimensionsStore::new(self.root.clone());
                 let state_store = StateStore::new(self.root.clone());
-                config_store.put(&config2).map_err(persist_failed)?;
-                dims_store.put(&dims2).map_err(persist_failed)?;
+                // Only rewrite the layers this op can change (ADR-0004 split);
+                // State always carries the new revision. `deprecate` may touch
+                // either layer, so it is compared by content.
+                let (config_changed, dims_changed) = match kind {
+                    "scale.declare" | "relation.declare" | "contraction.declare" => (true, false),
+                    "dimension.register" | "members.sync" | "member.propose" => (false, true),
+                    "observe" | "evidence.attach" => (false, false),
+                    _ => (
+                        serde_json::to_value(&config2).ok()
+                            != serde_json::to_value(&docs.config).ok(),
+                        serde_json::to_value(&dims2).ok() != serde_json::to_value(&docs.dims).ok(),
+                    ),
+                };
+                if config_changed {
+                    config_store.put(&config2).map_err(persist_failed)?;
+                }
+                if dims_changed {
+                    dims_store.put(&dims2).map_err(persist_failed)?;
+                }
                 state_store.put_current(&state2).map_err(persist_failed)?;
                 next_backing = Some(Backing::Persisted(Box::new(PersistedDocs {
                     config: config2,
@@ -1110,5 +1174,121 @@ mod tests {
             result.is_ok(),
             "a well-formed scale.declare must pass the shared schema validator"
         );
+    }
+
+    /// A persisted session with dimension `d1` and one synced member `x`.
+    fn synced_session(root: &std::path::Path) -> Session {
+        let mut session = open_session(root);
+        session
+            .command(&envelope(json!({
+                "kind": "dimension.register",
+                "dimensionId": "d1",
+                "dimensionKind": "criterion",
+            })))
+            .expect("register d1");
+        session
+            .command(&envelope(json!({
+                "kind": "members.sync",
+                "dimensionId": "d1",
+                "members": [ { "id": "x", "label": "X" } ],
+            })))
+            .expect("sync roster");
+        session
+    }
+
+    fn identical_resync(session: &mut Session) -> Value {
+        session
+            .command(&envelope(json!({
+                "kind": "members.sync",
+                "dimensionId": "d1",
+                "members": [ { "id": "x", "label": "X" } ],
+            })))
+            .expect("identical resync")
+    }
+
+    #[test]
+    fn resyncing_an_identical_roster_keeps_the_version() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut session = synced_session(tmp.path());
+        let before = session.status()["version"].as_u64();
+        let result = identical_resync(&mut session);
+        assert_eq!(result["version"].as_u64(), before);
+    }
+
+    #[test]
+    fn resyncing_an_identical_roster_reports_noop_true() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut session = synced_session(tmp.path());
+        let result = identical_resync(&mut session);
+        assert_eq!(result["noop"], json!(true));
+    }
+
+    #[test]
+    fn resyncing_an_identical_roster_writes_no_audit_line() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut session = synced_session(tmp.path());
+        let audit_path = tmp.path().join("audit/m.jsonl");
+        let before = std::fs::read_to_string(&audit_path)
+            .expect("read audit before")
+            .lines()
+            .count();
+        let _ = identical_resync(&mut session);
+        let after = std::fs::read_to_string(&audit_path)
+            .expect("read audit after")
+            .lines()
+            .count();
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn an_identical_duplicate_observe_keeps_the_version() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut session = open_session(tmp.path());
+        for (id, kind) in [("d1", "criterion"), ("d2", "criterion")] {
+            session
+                .command(&envelope(json!({
+                    "kind": "dimension.register",
+                    "dimensionId": id,
+                    "dimensionKind": kind,
+                })))
+                .expect("register dimension");
+        }
+        for (dimension, member) in [("d1", "x"), ("d2", "y")] {
+            session
+                .command(&envelope(json!({
+                    "kind": "members.sync",
+                    "dimensionId": dimension,
+                    "members": [ { "id": member } ],
+                })))
+                .expect("sync member");
+        }
+        session
+            .command(&envelope(json!({
+                "kind": "scale.declare",
+                "scale": { "id": "s", "levels": [ { "observation": "on", "value": 1 } ] },
+            })))
+            .expect("declare scale");
+        session
+            .command(&envelope(json!({
+                "kind": "relation.declare",
+                "relationId": "r",
+                "from": "d1",
+                "to": "d2",
+                "relationType": "supports",
+                "scale": "s",
+            })))
+            .expect("declare relation");
+        let observe = envelope(json!({
+            "kind": "observe",
+            "relationId": "r",
+            "from": "x",
+            "to": "y",
+            "observation": "on",
+            "provenanceClass": "normative",
+        }));
+        session.command(&observe).expect("first observe");
+        let before = session.status()["version"].as_u64();
+        let result = session.command(&observe).expect("duplicate observe");
+        assert_eq!(result["version"].as_u64(), before);
     }
 }

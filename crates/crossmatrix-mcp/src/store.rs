@@ -9,22 +9,24 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::schema_types::{CrossMatrixConfiguration, CrossMatrixDimensions, CrossMatrixState};
 
 /// Recursively sort object keys (explicit, independent of serde_json's Map
-/// ordering feature).
-fn canonicalize(value: &serde_json::Value) -> serde_json::Value {
+/// ordering feature). Takes ownership so large documents are re-keyed by move
+/// rather than deep-cloned.
+fn canonicalize(value: serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::Object(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            let mut out = serde_json::Map::new();
-            for key in keys {
-                out.insert(key.clone(), canonicalize(&map[key]));
-            }
-            serde_json::Value::Object(out)
+            let mut entries: Vec<(String, serde_json::Value)> = map.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, item)| (key, canonicalize(item)))
+                    .collect(),
+            )
         }
         serde_json::Value::Array(items) => {
-            serde_json::Value::Array(items.iter().map(canonicalize).collect())
+            serde_json::Value::Array(items.into_iter().map(canonicalize).collect())
         }
-        other => other.clone(),
+        other => other,
     }
 }
 
@@ -32,6 +34,11 @@ fn canonicalize(value: &serde_json::Value) -> serde_json::Value {
 /// 2-space indent, exactly one trailing newline — atomically via a temp file in
 /// the same directory followed by `fs::rename`.
 pub fn write_canonical(path: &Path, value: &serde_json::Value) -> Result<(), String> {
+    write_canonical_owned(path, value.clone())
+}
+
+/// [`write_canonical`] for a value the caller no longer needs (no deep clone).
+pub fn write_canonical_owned(path: &Path, value: serde_json::Value) -> Result<(), String> {
     let canonical = canonicalize(value);
     let mut text = serde_json::to_string_pretty(&canonical).map_err(|e| e.to_string())?;
     text.push('\n');
@@ -100,7 +107,7 @@ impl ConfigStore {
     pub fn put(&self, config: &CrossMatrixConfiguration) -> Result<(), String> {
         let path = self.config_path(&config.config_id, &config.version);
         let value = serde_json::to_value(config).map_err(|e| e.to_string())?;
-        write_canonical(&path, &value)
+        write_canonical_owned(&path, value)
     }
 
     /// Retrieve a Configuration by id + version.
@@ -135,7 +142,7 @@ impl DimensionsStore {
     pub fn put(&self, dims: &CrossMatrixDimensions) -> Result<(), String> {
         let path = self.dims_path(&dims.dimension_set_id, &dims.version);
         let value = serde_json::to_value(dims).map_err(|e| e.to_string())?;
-        write_canonical(&path, &value)
+        write_canonical_owned(&path, value)
     }
 
     /// Retrieve a Dimensions doc by id + version.
@@ -170,7 +177,7 @@ impl StateStore {
     pub fn put(&self, state: &CrossMatrixState) -> Result<(), String> {
         let path = self.state_path(&state.state_id, state.version.as_deref().unwrap_or(""));
         let value = serde_json::to_value(state).map_err(|e| e.to_string())?;
-        write_canonical(&path, &value)
+        write_canonical_owned(&path, value)
     }
 
     /// Retrieve a State doc by id + version.
@@ -189,7 +196,7 @@ impl StateStore {
     pub fn put_current(&self, state: &CrossMatrixState) -> Result<(), String> {
         let path = self.current_path(&state.state_id);
         let value = serde_json::to_value(state).map_err(|e| e.to_string())?;
-        write_canonical(&path, &value)
+        write_canonical_owned(&path, value)
     }
 
     /// Read the unversioned "current" State doc: `<root>/state/<stateId>.json`.
@@ -241,7 +248,7 @@ impl AuditLog {
             .ok_or_else(|| format!("path '{}' has no parent directory", path.display()))?;
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         let value = serde_json::to_value(entry).map_err(|e| e.to_string())?;
-        let compact = serde_json::to_string(&canonicalize(&value)).map_err(|e| e.to_string())?;
+        let compact = serde_json::to_string(&canonicalize(value)).map_err(|e| e.to_string())?;
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)

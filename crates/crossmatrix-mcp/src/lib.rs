@@ -2,6 +2,7 @@
 
 pub mod cli;
 pub mod merge;
+pub mod queries;
 pub mod repo;
 pub mod report;
 pub mod schema_types;

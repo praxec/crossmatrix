@@ -48,61 +48,6 @@ impl S {
         }
     }
 
-    /// A required string parameter under `/query/<name>` (fail-fast, recoverable).
-    fn str_param<'a>(request: &'a Value, name: &str) -> Result<&'a str, Rejection> {
-        request
-            .pointer(&format!("/query/{name}"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                Rejection::new(
-                    "bad_request",
-                    format!("query requires string parameter 'query.{name}'"),
-                    None,
-                    vec!["model.status".to_string()],
-                )
-            })
-    }
-
-    fn no_model() -> Rejection {
-        Rejection::new(
-            "no_model",
-            "no model loaded",
-            None,
-            vec!["model.open".to_string()],
-        )
-    }
-
-    fn unknown_relation(relation: &str) -> Rejection {
-        Rejection::new(
-            "unknown_relation",
-            format!("unknown relation: {relation}"),
-            None,
-            vec!["relation.declare".to_string(), "describe".to_string()],
-        )
-    }
-
-    fn unknown_member(member: &str) -> Rejection {
-        Rejection::new(
-            "unknown_member",
-            format!("unknown member: {member}"),
-            None,
-            vec![
-                "members.sync".to_string(),
-                "member.propose".to_string(),
-                "trace".to_string(),
-            ],
-        )
-    }
-
-    fn analysis_failed(message: impl Into<String>) -> Rejection {
-        Rejection::new(
-            "analysis_failed",
-            message,
-            None,
-            vec!["describe".to_string(), "model.status".to_string()],
-        )
-    }
-
     fn bad_request(message: impl Into<String>) -> Rejection {
         Rejection::new(
             "bad_request",
@@ -133,8 +78,10 @@ impl S {
                 "crossmatrix.query",
                 "Read / analysis (engine-computed, never mutating). query{kind,...}: model.status, \
                  slice, describe, trace, explain, gaps.next, gaps.orphans, coverage, stale, \
-                 conflicts, analyze(marginalize|contract|findings), validate, export. Reads are \
-                 scoped slices.",
+                 conflicts, report, export, analyze.marginalize, analyze.contract, \
+                 analyze.findings, validate. Optional rollup: true runs analyses over the derived \
+                 rolled-up model; slice/trace/stale accept member-id or sourceRef uri lookups and \
+                 limit/cursor paging (trace direction in|out|both). Reads are scoped slices.",
                 json!({ "type": "object", "properties": { "request": { "type": "object" } }, "required": ["request"] }),
             ),
         ]
@@ -146,191 +93,7 @@ impl S {
             "crossmatrix.command" => self.session.lock().unwrap().command(&request),
             "crossmatrix.query" => {
                 let session = self.session.lock().unwrap();
-                let kind = request
-                    .pointer("/query/kind")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                match kind {
-                    "model.status" => Ok(session.status()),
-                    "analyze.contract" => {
-                        let model = session.model().ok_or_else(Self::no_model)?;
-                        let mut all_findings: Vec<Value> = Vec::new();
-                        for cid in model.contraction_ids() {
-                            let findings = model.contract(cid);
-                            for f in findings {
-                                all_findings.push(serde_json::to_value(&f).map_err(|e| {
-                                    Self::analysis_failed(format!("serialize finding: {e}"))
-                                })?);
-                            }
-                        }
-                        Ok(json!({
-                            "findings": all_findings,
-                            "links": ["analyze.findings", "analyze.marginalize", "validate", "describe"]
-                        }))
-                    }
-                    "analyze.findings" => {
-                        let model = session.model().ok_or_else(Self::no_model)?;
-                        let findings: Vec<Value> = model
-                            .findings()
-                            .into_iter()
-                            .map(|f| {
-                                serde_json::to_value(&f).map_err(|e| {
-                                    Self::analysis_failed(format!("serialize finding: {e}"))
-                                })
-                            })
-                            .collect::<Result<_, _>>()?;
-                        Ok(json!({
-                            "findings": findings,
-                            "links": ["analyze.contract", "validate", "describe"]
-                        }))
-                    }
-                    "validate" => {
-                        let validated = session.model().is_some();
-                        Ok(json!({
-                            "validated": validated,
-                            "links": if validated {
-                                vec!["analyze.contract", "analyze.findings", "describe"]
-                            } else {
-                                vec!["open"]
-                            }
-                        }))
-                    }
-                    "describe" => {
-                        let model = session.model().ok_or_else(Self::no_model)?;
-                        let description = serde_json::to_value(model.describe()).map_err(|e| {
-                            Self::analysis_failed(format!("serialize description: {e}"))
-                        })?;
-                        Ok(json!({
-                            "describe": description,
-                            "links": ["slice", "trace", "coverage", "gaps.orphans", "gaps.next", "validate"]
-                        }))
-                    }
-                    "slice" => {
-                        let model = session.model().ok_or_else(Self::no_model)?;
-                        let relation = Self::str_param(&request, "relationId")?;
-                        let from = request.pointer("/query/from").and_then(|v| v.as_str());
-                        let to = request.pointer("/query/to").and_then(|v| v.as_str());
-                        let cells = model
-                            .slice(relation, from, to)
-                            .ok_or_else(|| Self::unknown_relation(relation))?;
-                        Ok(json!({
-                            "relation": relation,
-                            "cells": cells,
-                            "links": ["describe", "trace", "explain"]
-                        }))
-                    }
-                    "trace" => {
-                        let model = session.model().ok_or_else(Self::no_model)?;
-                        let member = Self::str_param(&request, "member")?;
-                        let dimension = model
-                            .dimension_of(member)
-                            .ok_or_else(|| Self::unknown_member(member))?
-                            .to_string();
-                        Ok(json!({
-                            "member": member,
-                            "dimension": dimension,
-                            "hops": model.trace(member),
-                            "links": ["explain", "coverage", "gaps.orphans", "describe"]
-                        }))
-                    }
-                    "explain" => {
-                        let model = session.model().ok_or_else(Self::no_model)?;
-                        let relation = Self::str_param(&request, "relationId")?;
-                        let from = Self::str_param(&request, "from")?;
-                        let to = Self::str_param(&request, "to")?;
-                        let cells = model
-                            .slice(relation, Some(from), Some(to))
-                            .ok_or_else(|| Self::unknown_relation(relation))?;
-                        Ok(json!({
-                            "relation": relation,
-                            "from": from,
-                            "to": to,
-                            "cells": cells,
-                            "links": ["trace", "slice", "describe"]
-                        }))
-                    }
-                    "coverage" => {
-                        let model = session.model().ok_or_else(Self::no_model)?;
-                        let axes = model.coverage();
-                        let uncovered: usize = axes.iter().map(|a| a.uncovered.len()).sum();
-                        let violations = axes
-                            .iter()
-                            .filter(|a| a.required && !a.uncovered.is_empty())
-                            .count();
-                        let axis_count = axes.len();
-                        Ok(json!({
-                            "axes": axes,
-                            "summary": { "axes": axis_count, "uncovered": uncovered, "violations": violations },
-                            "links": ["gaps.orphans", "gaps.next", "trace", "describe"]
-                        }))
-                    }
-                    "gaps.orphans" => {
-                        let model = session.model().ok_or_else(Self::no_model)?;
-                        Ok(json!({
-                            "orphans": model.orphans(),
-                            "links": ["gaps.next", "coverage", "trace"]
-                        }))
-                    }
-                    "gaps.next" => {
-                        let model = session.model().ok_or_else(Self::no_model)?;
-                        Ok(json!({
-                            "gaps": model.gaps_next(),
-                            "heuristic": "uncovered members ordered by resolved importance weight (unweighted last)",
-                            "links": ["gaps.orphans", "coverage", "trace"]
-                        }))
-                    }
-                    "analyze.marginalize" => {
-                        // The genuine per-HOW weighted technical-importance rollup:
-                        // wraps the core Model::marginalize. Never agent-computed.
-                        let model = session.model().ok_or_else(Self::no_model)?;
-                        let relation = Self::str_param(&request, "relationId")?;
-                        let axis = match Self::str_param(&request, "axis")? {
-                            "from" => crossmatrix::Axis::From,
-                            "to" => crossmatrix::Axis::To,
-                            other => {
-                                return Err(Self::bad_request(format!(
-                                    "query.axis must be 'from' or 'to', got '{other}'"
-                                )));
-                            }
-                        };
-                        // The engine returns pairs already sorted descending; an
-                        // unweighted-member diagnostic is returned verbatim (fail-fast).
-                        let pairs = model.marginalize(relation, axis).map_err(|e| {
-                            Self::analysis_failed(format!("marginalize failed: {e}"))
-                        })?;
-                        let findings: Vec<Value> = pairs
-                            .into_iter()
-                            .map(|(member, value)| json!({ "member": member, "value": value }))
-                            .collect();
-                        Ok(json!({
-                            "findings": findings,
-                            "links": ["analyze.contract", "analyze.findings", "validate", "describe"]
-                        }))
-                    }
-                    "stale" => {
-                        let model = session.model().ok_or_else(Self::no_model)?;
-                        let stale: Vec<Value> = model
-                            .findings()
-                            .into_iter()
-                            .filter(|f| matches!(f.kind, crossmatrix::FindingKind::StaleReference))
-                            .map(|f| {
-                                serde_json::to_value(&f).map_err(|e| {
-                                    Self::analysis_failed(format!("serialize finding: {e}"))
-                                })
-                            })
-                            .collect::<Result<_, _>>()?;
-                        Ok(json!({
-                            "findings": stale,
-                            "links": ["analyze.findings", "describe", "validate"]
-                        }))
-                    }
-                    _ => Ok(json!({
-                        "ok": true,
-                        "query": kind,
-                        "note": "query not supported in this build (conflicts needs valence/tension analysis — ADR-0002; export deferred)",
-                        "links": ["describe", "trace", "coverage", "gaps.orphans", "validate"]
-                    })),
-                }
+                crossmatrix_mcp::queries::query(&session, &request)
             }
             other => Err(Self::bad_request(format!("unknown tool: {other}"))),
         }
@@ -342,7 +105,11 @@ impl ServerHandler for S {
         result.capabilities = ServerCapabilities::builder().enable_tools().build();
         result.instructions = Some(
             "crossmatrix-mcp: a sparse N-dimensional weighted cross-reference engine.\n\
-             Tools: crossmatrix.command (writes, observation-only) and crossmatrix.query (reads/analyses)."
+             Tools: crossmatrix.command (writes, observation-only) and crossmatrix.query \
+             (reads/analyses: model.status, slice, trace (member-id or sourceRef uri lookups; \
+             direction, rollup, limit/cursor paging), describe, explain, gaps.next, gaps.orphans, \
+             coverage, stale (hashes/readFiles, paging), conflicts, report, export, \
+             analyze.marginalize, analyze.contract, analyze.findings, validate)."
                 .to_string(),
         );
         result
