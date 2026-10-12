@@ -2,6 +2,10 @@
 //! feature. The provider-neutral types live in [`crate::assist`]; this
 //! module owns the wire contract, config resolution and the [`HttpJudge`].
 
+// `#[async_trait]` expands to `#[must_use]` on functions returning a boxed future;
+// newer clippy flags that as double_must_use in code we do not write.
+#![allow(clippy::double_must_use)]
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 
