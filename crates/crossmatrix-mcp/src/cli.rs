@@ -1,10 +1,11 @@
 //! Command-line front end. No external arg parser: `init`, `check`,
-//! `--version`, `--help`, or (with no args) serve MCP on stdio.
+//! `skills`, `--version`, `--help`, or (with no args) serve MCP on stdio.
 
 use std::io::Write;
 use std::path::PathBuf;
 
 use crate::repo;
+use crate::skills;
 
 /// What `main` should do after `run` returns.
 pub enum CliAction {
@@ -26,6 +27,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> CliActi
         }
         Some("init") => command_init(&args[1..], out, err),
         Some("check") => command_check(&args[1..], out, err),
+        Some("skills") => CliAction::Exit(skills::run(&args[1..], out, err)),
         Some(_) => {
             let _ = write!(err, "{}", usage());
             CliAction::Exit(2)
@@ -112,8 +114,16 @@ USAGE:\n\
   crossmatrix-mcp                 Serve the MCP server on stdio\n\
   crossmatrix-mcp init [--dir D]  Create a .crossmatrix/ store in D (default: cwd)\n\
   crossmatrix-mcp check [--dir D] Validate the store at D/.crossmatrix (default: resolved root)\n\
+  crossmatrix-mcp skills ...      Install/uninstall/list the bundled agent skills (see below)\n\
   crossmatrix-mcp --version       Print version and exit\n\
   crossmatrix-mcp --help          Print this help and exit\n\
+\n\
+SKILLS:\n\
+  crossmatrix-mcp skills install   --target <target> (--project <dir> | --user) [--dry-run] [--force]\n\
+  crossmatrix-mcp skills uninstall --target <target> (--project <dir> | --user) [--dry-run]\n\
+  crossmatrix-mcp skills list      [--project <dir> | --user]\n\
+  Targets: claude, codex, cursor, copilot, gemini, agents-md, all.\n\
+  No MCP configuration is written; the registration command is printed.\n\
 \n\
 STATE-DIR RESOLUTION ORDER:\n\
   1. $CROSSMATRIX_DIR (relative values are joined onto the cwd)\n\

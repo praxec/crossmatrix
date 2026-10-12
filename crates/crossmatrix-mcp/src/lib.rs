@@ -7,6 +7,7 @@ pub mod repo;
 pub mod report;
 pub mod schema_types;
 pub mod session;
+pub mod skills;
 pub mod store;
 
 use crate::store::ConfigStore;
