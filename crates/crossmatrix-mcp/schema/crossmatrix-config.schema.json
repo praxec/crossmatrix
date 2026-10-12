@@ -52,8 +52,8 @@
     },
     "RelationType": {
       "type": "string",
-      "description": "Supporting AND opposing valences as distinct types (separation, not a signed scale).",
-      "enum": ["satisfies", "supports", "implements", "verifies", "covers", "mitigates", "derives_from", "constrains", "dependsOn", "undermines", "opposes", "blocks", "exposes"]
+      "description": "Supporting AND opposing valences as distinct types (separation, not a signed scale). `contains` is a structural self-relation: from == to, cell from = parent, to = child; acyclic; rolls leaf observations up to ancestors.",
+      "enum": ["satisfies", "supports", "implements", "verifies", "covers", "mitigates", "derives_from", "constrains", "dependsOn", "contains", "undermines", "opposes", "blocks", "exposes"]
     },
     "LifecycleStatus": { "type": "string", "enum": ["active", "deprecated"], "default": "active" },
     "RelationDecl": {

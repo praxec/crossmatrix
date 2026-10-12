@@ -32,7 +32,9 @@
         "locator": { "type": "string" },
         "contentHash": { "type": "string" },
         "version": { "type": "string" },
-        "excerpt": { "type": "string" }
+        "excerpt": { "type": "string" },
+        "uri": { "type": "string", "description": "Location of the authoritative source, e.g. file://src/lib.rs or https://...; the stable lookup key for staleness and trace-by-uri." },
+        "hash": { "type": "string", "description": "Content hash of the source at observation time, algorithm-prefixed, e.g. sha256:<hex>. Compared by `stale`." }
       }
     },
     "Member": {

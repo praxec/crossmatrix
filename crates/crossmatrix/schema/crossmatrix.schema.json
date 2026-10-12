@@ -49,8 +49,8 @@
     },
     "RelationType": {
       "type": "string",
-      "description": "Includes BOTH supporting and OPPOSING valences as distinct types (separation, not a signed scale). `dependsOn` (typically a self-relation, from==to) carries a dependency matrix; its cyclic analysis (SCC/layering) routes to the graph core.",
-      "enum": ["satisfies", "supports", "implements", "verifies", "covers", "mitigates", "derives_from", "constrains", "dependsOn", "undermines", "opposes", "blocks", "exposes"]
+      "description": "Includes BOTH supporting and OPPOSING valences as distinct types (separation, not a signed scale). `dependsOn` (typically a self-relation, from==to) carries a dependency matrix; its cyclic analysis (SCC/layering) routes to the graph core. `contains` is a structural self-relation: from == to, cell from = parent, to = child; acyclic; rolls leaf observations up to ancestors.",
+      "enum": ["satisfies", "supports", "implements", "verifies", "covers", "mitigates", "derives_from", "constrains", "dependsOn", "contains", "undermines", "opposes", "blocks", "exposes"]
     },
     "SourceRef": {
       "type": "object", "additionalProperties": false,
@@ -62,7 +62,9 @@
         "locator": { "type": "string", "description": "Sub-source location (line range, node id, selector)." },
         "contentHash": { "type": "string", "description": "FAST NON-cryptographic identity+change hash at observation time (e.g. xxh3/fnv). Re-hash later -> staleness. NOT for security." },
         "version": { "type": "string" },
-        "excerpt": { "type": "string" }
+        "excerpt": { "type": "string" },
+        "uri": { "type": "string", "description": "Location of the authoritative source, e.g. file://src/lib.rs or https://...; the stable lookup key for staleness and trace-by-uri." },
+        "hash": { "type": "string", "description": "Content hash of the source at observation time, algorithm-prefixed, e.g. sha256:<hex>. Compared by `stale`." }
       }
     },
     "Evidence": {

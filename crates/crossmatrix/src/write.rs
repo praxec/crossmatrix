@@ -9,7 +9,7 @@
 //! The module is deliberately domain-neutral (no domain words) and pure (no fs,
 //! no network, no dependencies beyond `serde_json`/`thiserror`).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::raw;
 use crate::{
@@ -140,6 +140,17 @@ pub struct SyncSummary {
     pub unchanged: Vec<String>,
     pub deprecated: Vec<String>,
     pub reactivated: Vec<String>,
+}
+
+impl SyncSummary {
+    /// True when the sync changed nothing (no adds, updates, deprecations, or
+    /// reactivations); `unchanged` entries do not count as a change.
+    pub fn is_noop(&self) -> bool {
+        self.added.is_empty()
+            && self.updated.is_empty()
+            && self.deprecated.is_empty()
+            && self.reactivated.is_empty()
+    }
 }
 
 /// The kind of element [`deprecate`] targets when the id alone is ambiguous.
@@ -435,9 +446,20 @@ pub fn sync_members(
         .ok_or_else(|| WriteError::UnknownDimension(dimension_id.to_string()))?;
     let dim_weight_scale = doc.dimensions[dim_index].weight_scale.clone();
 
+    // Index every member once: owner lookup is O(1) instead of a linear scan
+    // per roster entry, keeping the whole sync O(total members + cells).
+    let mut owner_by_member: HashMap<&str, &str> = HashMap::new();
+    for d in &doc.dimensions {
+        for m in &d.members {
+            owner_by_member
+                .entry(m.id.as_str())
+                .or_insert(d.id.as_str());
+        }
+    }
+
     for spec in roster {
-        if let Some(owner) = member_owner(doc, &spec.id)
-            && owner != dimension_id
+        if let Some(owner) = owner_by_member.get(spec.id.as_str())
+            && *owner != dimension_id
         {
             return Err(WriteError::DuplicateMember {
                 dimension: dimension_id.to_string(),
@@ -462,12 +484,18 @@ pub fn sync_members(
         }
     }
 
+    // Member id -> position within the target dimension, maintained as we add,
+    // so upsert never does a per-entry linear `position` scan.
+    let mut index_by_id: HashMap<String, usize> = next.dimensions[dim_index]
+        .members
+        .iter()
+        .enumerate()
+        .map(|(index, member)| (member.id.clone(), index))
+        .collect();
+
     // Upsert roster entries (roster order).
     for spec in roster {
-        let existing = next.dimensions[dim_index]
-            .members
-            .iter()
-            .position(|m| m.id == spec.id);
+        let existing = index_by_id.get(spec.id.as_str()).copied();
         match existing {
             Some(index) => {
                 let was_deprecated =
@@ -495,9 +523,11 @@ pub fn sync_members(
                 }
             }
             None => {
+                let new_index = next.dimensions[dim_index].members.len();
                 next.dimensions[dim_index]
                     .members
                     .push(member_from_spec(spec));
+                index_by_id.insert(spec.id.clone(), new_index);
                 summary.added.push(spec.id.clone());
             }
         }
