@@ -10,7 +10,10 @@ mod config {
 
 mod dimensions {
     #![allow(clippy::all, dead_code, unused_imports)]
-    typify::import_types!("schema/crossmatrix-dimensions.schema.json");
+    typify::import_types!(
+        schema = "schema/crossmatrix-dimensions.schema.json",
+        replace = { DimensionKind = String },
+    );
 }
 
 mod state {

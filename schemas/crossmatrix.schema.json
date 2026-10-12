@@ -44,8 +44,8 @@
     "Confidence": { "type": "string", "enum": ["low", "medium", "high"] },
     "DimensionKind": {
       "type": "string",
-      "description": "A TYPED DISPATCH discriminator: the engine binds deterministic kind-capabilities to it (weight-source policy, valid relations/scales, sibling-core routing, default profile/findings) via a DECLARED kind-capability profile. It affords/validates/routes; it must NOT import domain ALGORITHMS (those stay federated in the owning system).",
-      "enum": ["customer_requirement", "engineering_characteristic", "stakeholder_priority", "option", "criterion", "constraint", "implementation_asset", "test_artifact", "business_metric", "failure_mode", "jtbd_step", "context", "code_element"]
+      "description": "A TYPED DISPATCH discriminator: the engine binds deterministic kind-capabilities to it (weight-source policy, valid relations/scales, sibling-core routing, default profile/findings) via a DECLARED kind-capability profile. It affords/validates/routes; it must NOT import domain ALGORITHMS (those stay federated in the owning system). Open vocabulary (snake_case). Common kinds: customer_requirement, engineering_characteristic, stakeholder_priority, option, criterion, constraint, implementation_asset, test_artifact, business_metric, failure_mode, jtbd_step, context, code_element, user_segment, journey_step, competitor, deliverable, risk. Domain meaning lives in configurations and skills, never in engine code.",
+      "pattern": "^[a-z][a-z0-9_]*$"
     },
     "RelationType": {
       "type": "string",

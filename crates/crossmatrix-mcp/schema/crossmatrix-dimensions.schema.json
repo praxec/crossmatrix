@@ -18,8 +18,8 @@
     "LifecycleStatus": { "type": "string", "enum": ["active", "deprecated"], "default": "active" },
     "DimensionKind": {
       "type": "string",
-      "description": "A TYPED DISPATCH discriminator (engine binds kind-capabilities: weight-source policy, valid relations/scales, routing). Affords/validates/routes; never imports domain ALGORITHMS.",
-      "enum": ["customer_requirement", "engineering_characteristic", "stakeholder_priority", "option", "criterion", "constraint", "implementation_asset", "test_artifact", "business_metric", "failure_mode", "jtbd_step", "context", "code_element"]
+      "description": "A TYPED DISPATCH discriminator (engine binds kind-capabilities: weight-source policy, valid relations/scales, routing). Affords/validates/routes; never imports domain ALGORITHMS. Open vocabulary (snake_case). Common kinds: customer_requirement, engineering_characteristic, stakeholder_priority, option, criterion, constraint, implementation_asset, test_artifact, business_metric, failure_mode, jtbd_step, context, code_element, user_segment, journey_step, competitor, deliverable, risk. Domain meaning lives in configurations and skills, never in engine code.",
+      "pattern": "^[a-z][a-z0-9_]*$"
     },
     "SourceRef": {
       "type": "object",

@@ -16,9 +16,14 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+pub mod write;
+
 mod raw {
     #![allow(clippy::all, dead_code)]
-    typify::import_types!("schema/crossmatrix.schema.json");
+    typify::import_types!(
+        schema = "schema/crossmatrix.schema.json",
+        replace = { DimensionKind = String },
+    );
 }
 
 pub use raw::{
@@ -80,7 +85,13 @@ impl Model {
     /// Parse + validate (full invariant set per ADR 0002/0003).
     pub fn load(json: &str) -> Result<Self, ValidationError> {
         let doc: CrossMatrixModel = serde_json::from_str(json)?;
+        Self::from_doc(doc)
+    }
 
+    /// Validate an already-parsed document into a [`Model`], running exactly
+    /// the same invariant checks as [`Model::load`]. Used by the write API to
+    /// re-validate a freshly built document before handing it back.
+    pub fn from_doc(doc: CrossMatrixModel) -> Result<Self, ValidationError> {
         let mut members_by_dim: HashMap<String, HashSet<String>> = HashMap::new();
         for d in &doc.dimensions {
             members_by_dim.insert(
@@ -189,6 +200,16 @@ impl Model {
             doc,
             members_by_dim,
         })
+    }
+
+    /// The underlying, validated document.
+    pub fn doc(&self) -> &CrossMatrixModel {
+        &self.doc
+    }
+
+    /// The declared observation→value scales.
+    pub fn scales(&self) -> &[ScaleDef] {
+        &self.doc.scales
     }
 
     pub fn dimensions(&self) -> &[Dimension] {
