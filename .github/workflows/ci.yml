@@ -39,3 +39,36 @@ jobs:
 
       - name: Test
         run: cargo test --all
+
+  npm:
+    name: npm launcher (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: launcher tests
+        working-directory: npm
+        run: node --test test/*.test.mjs
+      # `--ignore-scripts` skips the prepack hook, so sync-skills runs first to
+      # bundle the repository skills into the dry-run tarball.
+      - name: bundle skills
+        working-directory: npm
+        run: node lib/sync-skills.js
+      - name: npm pack (dry run)
+        working-directory: npm
+        run: npm pack --dry-run --ignore-scripts
+
+  version-sync:
+    name: version sync
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: every version field agrees with Cargo.toml
+        run: sh scripts/check-version-sync.sh
