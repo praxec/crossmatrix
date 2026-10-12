@@ -377,6 +377,15 @@ impl ServerHandler for S {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    match crossmatrix_mcp::cli::run(
+        &std::env::args().skip(1).collect::<Vec<_>>(),
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    ) {
+        crossmatrix_mcp::cli::CliAction::Exit(code) => std::process::exit(code),
+        crossmatrix_mcp::cli::CliAction::Serve => {}
+    }
+
     eprintln!("crossmatrix-mcp: serving on stdio");
     let svc = S::default().serve(stdio()).await?;
     svc.waiting().await?;

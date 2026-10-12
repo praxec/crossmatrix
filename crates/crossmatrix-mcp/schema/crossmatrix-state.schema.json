@@ -10,6 +10,7 @@
     "schemaVersion": { "type": "string" },
     "stateId": { "type": "string" },
     "version": { "type": "string" },
+    "revision": { "type": "integer", "minimum": 0, "description": "Monotonic model revision used for optimistic CAS (command expectedVersion). Bumped by every accepted crossmatrix.command mutation; absent means 0." },
     "configRef": {
       "type": "object",
       "description": "Stable id+version binding to the Configuration this State observes (NOT a $ref). The merge pins an EXACT (configId, version).",
