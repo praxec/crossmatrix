@@ -14,8 +14,13 @@ const SKILLS_DIR = path.join(NPM_DIR, '..', 'skills');
 // Build the bundled skills and inspect the resulting tarball once.
 const sync = spawnSync(process.execPath, ['lib/sync-skills.js'], { cwd: NPM_DIR, encoding: 'utf8' });
 if (sync.status !== 0) throw new Error(`sync-skills failed: ${sync.stderr}`);
-const packed = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: NPM_DIR, encoding: 'utf8' });
-if (packed.status !== 0) throw new Error(`npm pack failed: ${packed.stderr}`);
+// On Windows npm is npm.cmd, which Node only runs through a shell.
+const packed = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+  cwd: NPM_DIR,
+  encoding: 'utf8',
+  shell: process.platform === 'win32',
+});
+if (packed.status !== 0) throw new Error(`npm pack failed: ${packed.stderr ?? packed.error}`);
 const files = JSON.parse(packed.stdout)[0].files.map((f) => f.path);
 
 const skillNames = fs
