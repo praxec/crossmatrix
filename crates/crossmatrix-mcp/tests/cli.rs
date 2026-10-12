@@ -30,7 +30,10 @@ fn version_long_prints_package_version_and_exits_zero() {
             out.status.code(),
             String::from_utf8_lossy(&out.stdout).into_owned()
         ),
-        (Some(0), "crossmatrix-mcp 0.2.1\n".to_string())
+        (
+            Some(0),
+            format!("crossmatrix-mcp {}\n", env!("CARGO_PKG_VERSION"))
+        )
     );
 }
 
@@ -42,7 +45,10 @@ fn version_short_prints_package_version_and_exits_zero() {
             out.status.code(),
             String::from_utf8_lossy(&out.stdout).into_owned()
         ),
-        (Some(0), "crossmatrix-mcp 0.2.1\n".to_string())
+        (
+            Some(0),
+            format!("crossmatrix-mcp {}\n", env!("CARGO_PKG_VERSION"))
+        )
     );
 }
 
