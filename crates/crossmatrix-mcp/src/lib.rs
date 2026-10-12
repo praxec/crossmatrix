@@ -3,6 +3,7 @@
 pub mod cli;
 pub mod merge;
 pub mod repo;
+pub mod report;
 pub mod schema_types;
 pub mod store;
 
