@@ -71,6 +71,9 @@ Persistence + id-resolution are **MCP-layer I/O** (mcp reads/writes JSON, hands 
 
 ## Follow-ups / build order
 
+Status (v0.3.0): Phases A–C are implemented. The store is the repo-committed `.crossmatrix/` directory (`config/<configId>@<version>.json`, `dimensions/<dimensionSetId>@<version>.json`, `state/<stateId>.json` carrying a `revision`, `audit/<stateId>.jsonl`), validated by `crossmatrix-mcp check`; incremental mutation shipped with the core write API. Phase D (`config.sync` across projects) remains open.
+
+
 - **Phase A:** the three schemas (Configuration, Dimensions, State) + id-refs + `aspect` discriminator + typify type-gen; the merge/compat rules (§3).
 - **Phase B:** mcp `config.*` / `dimensions.*` / `state.*` stores + `model.open` (resolve+merge → `Model::load`).
 - **Phase C:** mcp query/analyze surface + envelope/HATEOAS/observation-only.

@@ -1,6 +1,6 @@
 # ADR 0003 — `crossmatrix-mcp`: the LLM-facing MCP contract
 
-- Status: Proposed
+- Status: Accepted (2026-10-12 — implemented in v0.3.0: every write op, the driver/read/analyze queries, `conflicts`, `report`/`export`; `kindProfile.register`, `analyze.priority` and `analyze.compare` remain deferred)
 - Date: 2026-06-29
 - Builds on: ADR 0002 (`crossmatrix` core); prior internal design notes (the mutation-first envelope + canonical-state/audit split this extends).
 
@@ -48,5 +48,12 @@ So the contract does not exceed the IA: the analytical/structural surface is ful
 - Cross-core queries route honestly rather than faking — preserving the federated-cores architecture.
 
 ## Follow-ups
+
+Closed in v0.3.0:
+- The companion `schemas/crossmatrix-mcp.schema.json` now validates every command envelope and op payload, and documents the implemented queries.
+- Optional `status`/`supersededBy` (Member, Relation) and `coveragePolicy` (Relation) are in the core schema and enforced: deprecated elements leave analyses, and `coverage` reports `required` per policy.
+- The core write API exists (`crossmatrix::write`), so `observe`, `member.propose`, `members.sync`, `evidence.attach` and `deprecate` mutate repo-committed state with CAS, idempotency, an audit line and `links` on every response.
+
+Original list:
 - `schemas/crossmatrix-mcp.schema.json` (this ADR's companion): the command/query envelope + op payloads, extending the prior internal envelope to the observation/cell model.
 - Add optional `status`/`supersededBy` + `coveragePolicy` to the core schema (ADR 0002 amendment) when scaffolding.
