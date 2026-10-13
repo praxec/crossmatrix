@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- `server.json` now carries the version in the OCI identifier tag
+  (`ghcr.io/praxec/crossmatrix:X.Y.Z`) instead of a package `version` field,
+  which the MCP registry rejects (the v0.3.0 registry publish failed with HTTP
+  400). `check-version-sync.sh` checks the tag and refuses a package `version`.
+
 ### Added
 - `scripts/npm-release.sh`: the maintainer's manual npm release of the launcher tarball attached to a GitHub release (digest, contents and bundled-skills checks; 2FA prompt; post-publish `npx --version` check), and `docs/releasing.md`, the release runbook.
 

@@ -18,7 +18,9 @@ On a branch off `dev`, set the same version in every file that carries it:
   dependency (`crossmatrix = { version = "X.Y.Z", path = "../crossmatrix" }`).
 - `Cargo.lock`: run `cargo check` so the lock file records the new
   `crossmatrix` and `crossmatrix-mcp` versions.
-- `server.json`: the top-level `version` and every `packages[].version`.
+- `server.json`: the top-level `version` and the tag of the OCI package
+  identifier (`ghcr.io/praxec/crossmatrix:X.Y.Z`). The OCI package has no
+  `version` field: the MCP registry rejects one.
 - `npm/package.json`: `version` (the launcher downloads the GitHub release with
   this version, so it must match).
 
@@ -162,8 +164,13 @@ Container image:
 
 ```sh
 docker pull ghcr.io/praxec/crossmatrix:X.Y.Z
-node scripts/mcp-smoke.mjs docker run -i --rm ghcr.io/praxec/crossmatrix:X.Y.Z
+# mcp-smoke.mjs takes a single executable, so wrap `docker run`:
+printf '#!/bin/sh\nexec docker run -i --rm ghcr.io/praxec/crossmatrix:X.Y.Z "$@"\n' > /tmp/cmx-docker && chmod +x /tmp/cmx-docker
+node scripts/mcp-smoke.mjs /tmp/cmx-docker
 ```
+
+The package must be public (praxec → Packages → crossmatrix → Package settings →
+Change visibility) for anonymous pulls and the MCP registry entry to work.
 
 MCP registry: confirm the registry job succeeded, or look the server up in the
 registry and check its version.

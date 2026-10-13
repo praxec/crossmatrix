@@ -435,11 +435,31 @@ test('check-version-sync.sh exits 1 when server.json disagrees', (t) => {
   assert.equal(r.status, 1);
 });
 
-test('check-version-sync.sh exits 1 when a server.json package disagrees', (t) => {
+test('check-version-sync.sh exits 1 when the server.json OCI identifier tag disagrees', (t) => {
   const root = versionRoot(t);
   const server = path.join(root, 'server.json');
   const data = JSON.parse(fs.readFileSync(server, 'utf8'));
-  data.packages[0].version = '9.9.9';
+  data.packages[0].identifier = 'ghcr.io/praxec/crossmatrix:9.9.9';
+  fs.writeFileSync(server, JSON.stringify(data, null, 2));
+  const r = runVersionSync(['--root', root]);
+  assert.equal(r.status, 1);
+});
+
+test('check-version-sync.sh rejects a version field on a server.json OCI package', (t) => {
+  const root = versionRoot(t);
+  const server = path.join(root, 'server.json');
+  const data = JSON.parse(fs.readFileSync(server, 'utf8'));
+  data.packages[0].version = currentVersion();
+  fs.writeFileSync(server, JSON.stringify(data, null, 2));
+  const r = runVersionSync(['--root', root]);
+  assert.match(r.stderr, /must carry the version in the identifier tag/);
+});
+
+test('check-version-sync.sh exits 1 for an untagged server.json OCI identifier', (t) => {
+  const root = versionRoot(t);
+  const server = path.join(root, 'server.json');
+  const data = JSON.parse(fs.readFileSync(server, 'utf8'));
+  data.packages[0].identifier = 'ghcr.io/praxec/crossmatrix';
   fs.writeFileSync(server, JSON.stringify(data, null, 2));
   const r = runVersionSync(['--root', root]);
   assert.equal(r.status, 1);
