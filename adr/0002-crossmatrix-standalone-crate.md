@@ -1,6 +1,6 @@
 # ADR 0002 — `crossmatrix`: a standalone sparse N-dimensional weighted cross-reference crate
 
-- Status: Proposed
+- Status: Accepted (2026-10-12 — implemented: engine, typed write API `crossmatrix::write`, lifecycle `status`/`supersededBy`, `coveragePolicy`, `contains` hierarchies; `priority`/`sensitivity` remain deferred)
 - Date: 2026-06-29
 - Related: prior internal design notes (the mutation-first write API this reuses).
 

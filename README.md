@@ -62,6 +62,103 @@ cargo build --release
 
 produces the `crossmatrix-mcp` MCP stdio server.
 
+## Repo-committed models: `.crossmatrix/`
+
+crossmatrix keeps a model as three documents linked by stable `id@version`
+(ADR-0004), plus an append-only audit log, in a directory you commit:
+
+```sh
+crossmatrix-mcp init            # creates .crossmatrix/ in the current directory
+crossmatrix-mcp check           # validates every document and cross-reference
+```
+
+```
+.crossmatrix/
+  config/<configId>@<version>.json            # methodology: scales, relations, contractions
+  dimensions/<dimensionSetId>@<version>.json  # dimensions and their members
+  state/<stateId>.json                        # cells/observations + revision
+  audit/<stateId>.jsonl                       # one line per accepted mutation (merge=union)
+```
+
+Writes are canonical JSON (sorted keys, 2-space indent, trailing newline) and
+atomic, so diffs stay small. Findings are computed on every read and never
+stored. `check` exits non-zero with path-specific diagnostics (for example
+`state/demo.json: cells[3].to: unknown member 'x' in dimension 'dim_part'`);
+run it in CI.
+
+The server finds its store from, in order: `CROSSMATRIX_DIR`, the nearest
+ancestor directory containing `.crossmatrix/`, `$XDG_DATA_HOME/crossmatrix`
+(or `~/.local/share/crossmatrix`), then `./crossmatrix-state`. `model.status`
+reports the resolved `root`.
+
+## CLI
+
+| Command | Effect |
+|---|---|
+| `crossmatrix-mcp` | serve MCP on stdio |
+| `crossmatrix-mcp init [--dir D]` | create `D/.crossmatrix/` (idempotent) |
+| `crossmatrix-mcp check [--dir D]` | validate the store; exit 1 on any problem |
+| `crossmatrix-mcp --version` / `--help` | version / usage |
+
+## Tools
+
+Two MCP tools, `crossmatrix.command` (writes) and `crossmatrix.query` (reads).
+Every response, including a rejection, carries `links` to the legal next ops;
+a rejection's `structuredContent` is `{ok: false, error: {code, message}, links}`.
+
+### Writes (`crossmatrix.command`)
+
+```json
+{"request": {"schemaVersion": "0.2.0", "requestId": "r-17", "modelId": "checkout",
+  "expectedVersion": 16, "actor": {"actorType": "llm", "persona": "observer"},
+  "op": {"kind": "observe", "relationId": "rel_need_char", "from": "need_fast",
+         "to": "char_latency", "observation": "strong", "provenanceClass": "normative"}}}
+```
+
+| Op | Layer | Purpose |
+|---|---|---|
+| `model.open` | — | open (or create) `state/<stateId>.json`; survives restarts |
+| `model.status` | — | version, store root, counts |
+| `scale.declare` | Configuration | observation token → value table |
+| `relation.declare` | Configuration | `from`/`to` dimensions, `relationType`, scale, `coveragePolicy` |
+| `contraction.declare` | Configuration | a chain of relations for derived views |
+| `dimension.register` | Dimensions | an axis (`dimensionKind` is any snake_case word) |
+| `members.sync` | Dimensions | upsert a roster; missing members are deprecated, not deleted; an unchanged roster is a no-op |
+| `member.propose` | Dimensions | add one member |
+| `observe` | State | a token + evidence on a cell (never a number) |
+| `evidence.attach` | State | add evidence to an observation |
+| `deprecate` | any | retire a member or relation (`supersededBy`) |
+
+Observation-only: a numeric member `weight` is accepted only with
+`sourceRef.system` (a deterministic import), and a `measuredValue` only with
+`provenanceClass: observed` plus a `sourceRef`. `expectedVersion` is an
+optimistic lock; `requestId` makes a command idempotent, also across restarts.
+Each accepted mutation appends one audit line `{ts, requestId, actor, op,
+beforeVersion, afterVersion, summary}`.
+
+The legacy one-call flow still works: a command carrying a full `model`
+imports it into the session (in memory) for the queries that follow.
+
+### Reads (`crossmatrix.query`)
+
+`model.status`, `describe`, `slice`, `trace`, `explain`, `coverage`,
+`gaps.orphans`, `gaps.next`, `stale`, `conflicts`, `analyze.marginalize`,
+`analyze.contract`, `analyze.findings`, `validate`, `report`, `export`.
+
+- `report {relationId?}` returns a Markdown House of Quality: weights, the
+  relationship matrix, the correlation roof (a self-relation), technical
+  importance, targets (`attributes.target`), coverage and findings with
+  contributors. Without `relationId` it covers every relation.
+- `export {format: model|report|findings}` returns the merged model JSON.
+- `conflicts {relationId?}` lists valence-by-separation tensions and conflicts.
+- `trace` and `slice` accept a member id or a `sourceRef.uri`, page with
+  `limit`/`cursor`, and with `rollup: true` roll leaf observations up a
+  `contains` hierarchy (a directory implements a feature if any file under it
+  does).
+- `stale {hashes?, readFiles?}` compares stored source hashes with current ones
+  (`readFiles` hashes `file://` sources inside the project) and returns the
+  changed members plus every cell that references them, paged.
+
 ## Using it with Praxec
 
 This is an MCP tool used by [Praxec](https://github.com/praxec/praxec) packs. The easiest way to

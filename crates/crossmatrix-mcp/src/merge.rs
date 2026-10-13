@@ -86,13 +86,90 @@ pub fn merge(
     let model = serde_json::json!({
         "schemaVersion": config_val["schemaVersion"],
         "modelId": state.state_id,
-        "scales": config_val["scales"],
+        "scales": config_val.get("scales").cloned().unwrap_or_else(|| serde_json::json!([])),
         "dimensions": dims_val["dimensions"],
         "relations": relations,
-        "contractions": config_val["contractions"],
+        "contractions": config_val.get("contractions").cloned().unwrap_or_else(|| serde_json::json!([])),
     });
 
     Ok(model)
+}
+
+/// Inverse of [`merge`]: decompose a validated engine model back into the three
+/// ADR-0004 layers. The provided `prev_*` documents supply the identity/schema
+/// fields (and any State fields the engine model does not carry), so a model
+/// loaded from a store round-trips through `merge(split(m))`.
+pub fn split(
+    model: &crossmatrix::CrossMatrixModel,
+    prev_config: &CrossMatrixConfiguration,
+    prev_dims: &CrossMatrixDimensions,
+    prev_state: &CrossMatrixState,
+) -> Result<
+    (
+        CrossMatrixConfiguration,
+        CrossMatrixDimensions,
+        CrossMatrixState,
+    ),
+    String,
+> {
+    // Configuration: keep the methodology identity from prev_config; take the
+    // declared scales/contractions from the model; relations lose their cells
+    // (State owns those) but keep the previous declaration's `label` by id.
+    let mut config_val =
+        serde_json::to_value(prev_config).map_err(|e| format!("serialize config: {e}"))?;
+    let mut relations: Vec<serde_json::Value> = Vec::new();
+    for rel in &model.relations {
+        let mut rel_val =
+            serde_json::to_value(rel).map_err(|e| format!("serialize relation: {e}"))?;
+        let prev_label = prev_config
+            .relations
+            .iter()
+            .find(|decl| decl.id == rel.id)
+            .and_then(|decl| decl.label.clone());
+        let obj = rel_val
+            .as_object_mut()
+            .ok_or_else(|| "relation did not serialize to an object".to_string())?;
+        obj.remove("cells");
+        if let Some(label) = prev_label {
+            obj.insert("label".to_string(), serde_json::Value::String(label));
+        }
+        relations.push(rel_val);
+    }
+    config_val["scales"] =
+        serde_json::to_value(&model.scales).map_err(|e| format!("serialize scales: {e}"))?;
+    config_val["relations"] = serde_json::Value::Array(relations);
+    config_val["contractions"] = serde_json::to_value(&model.contractions)
+        .map_err(|e| format!("serialize contractions: {e}"))?;
+
+    // Dimensions: keep the entity-set identity from prev_dims; take the axes
+    // and rosters from the model.
+    let mut dims_val =
+        serde_json::to_value(prev_dims).map_err(|e| format!("serialize dimensions: {e}"))?;
+    dims_val["dimensions"] = serde_json::to_value(&model.dimensions)
+        .map_err(|e| format!("serialize model dimensions: {e}"))?;
+
+    // State: keep everything from prev_state except the cells, which are the
+    // model's cells flattened in relation order and tagged with `relationId`.
+    let mut state_val =
+        serde_json::to_value(prev_state).map_err(|e| format!("serialize state: {e}"))?;
+    let mut cells: Vec<serde_json::Value> = Vec::new();
+    for rel in &model.relations {
+        for cell in &rel.cells {
+            cells.push(serde_json::json!({
+                "relationId": rel.id,
+                "from": cell.from,
+                "to": cell.to,
+                "observations": cell.observations,
+            }));
+        }
+    }
+    state_val["cells"] = serde_json::Value::Array(cells);
+
+    let config =
+        serde_json::from_value(config_val).map_err(|e| format!("build configuration: {e}"))?;
+    let dims = serde_json::from_value(dims_val).map_err(|e| format!("build dimensions: {e}"))?;
+    let state = serde_json::from_value(state_val).map_err(|e| format!("build state: {e}"))?;
+    Ok((config, dims, state))
 }
 
 #[cfg(test)]
@@ -142,6 +219,32 @@ mod tests {
 
         let result = merge(&config, &dimensions, &state);
         assert!(result.is_err(), "merge must reject config version mismatch");
+    }
+
+    #[test]
+    fn split_then_merge_round_trips_an_engine_model() {
+        let config: CrossMatrixConfiguration =
+            serde_json::from_str(include_str!("../../../examples/split/hoq.config.json"))
+                .expect("deserialize config fixture");
+        let dimensions: CrossMatrixDimensions = serde_json::from_str(include_str!(
+            "../../../examples/split/qfd-fmeca.dimensions.json"
+        ))
+        .expect("deserialize dimensions fixture");
+        let state: CrossMatrixState =
+            serde_json::from_str(include_str!("../../../examples/split/demo.state.json"))
+                .expect("deserialize state fixture");
+
+        let merged = merge(&config, &dimensions, &state).expect("merge must succeed");
+        let doc: crossmatrix::CrossMatrixModel =
+            serde_json::from_value(merged).expect("merged model must deserialize");
+        let (config2, dims2, state2) =
+            split(&doc, &config, &dimensions, &state).expect("split must succeed");
+        let round = merge(&config2, &dims2, &state2).expect("merge round must succeed");
+        let mut expected = serde_json::to_value(&doc).expect("serialize model");
+        if let Some(obj) = expected.as_object_mut() {
+            obj.remove("findings");
+        }
+        assert_eq!(round, expected);
     }
 
     #[test]
