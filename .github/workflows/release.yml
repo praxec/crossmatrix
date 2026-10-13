@@ -30,20 +30,10 @@ jobs:
           set -euo pipefail
           printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$' \
             || { echo "::error::release tag must look like vMAJOR.MINOR.PATCH: $TAG"; exit 1; }
-          version="${TAG#v}"
-          pkg_version=$(awk '
-            /^\[/ { section=$0 }
-            /^version[[:space:]]*=/ && (section=="[package]" || section=="[workspace.package]") {
-              sub(/^version[[:space:]]*=[[:space:]]*/, ""); gsub(/[" ]/, ""); print; exit
-            }' Cargo.toml)
-          [ "$pkg_version" = "$version" ] \
-            || { echo "::error::tag $TAG (=$version) does not match Cargo.toml version $pkg_version"; exit 1; }
-          if [ -f server.json ]; then
-            server_version=$(python3 -c "import json;print(json.load(open('server.json'))['version'])")
-            [ "$server_version" = "$version" ] \
-              || { echo "::error::tag $TAG (=$version) does not match server.json version $server_version"; exit 1; }
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # Gate the whole release on the tag matching Cargo.toml, the Cargo.lock
+          # crates, server.json (top-level + every package) and npm/package.json.
+          sh scripts/check-version-sync.sh --tag "$TAG"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: create draft GitHub release
         shell: bash
@@ -163,6 +153,30 @@ jobs:
           set -euo pipefail
           gh release upload "$TAG" dist/checksums.sha256 dist/release-manifest.json \
             scripts/install.sh scripts/install.ps1 --clobber
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Packs the npm launcher (npm/) WITH the agent skills bundled and attaches
+      # the tarball with its digest. The `npm` job publishes exactly this file
+      # once the release is public. `--ignore-scripts` skips the prepack hook,
+      # so the skills sync must run explicitly first.
+      - name: pack npm launcher with skills and attach the tarball
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          node npm/lib/sync-skills.js
+          tarball="matthew-cochran-crossmatrix-${VERSION}.tgz"
+          (cd npm && npm pack --ignore-scripts --pack-destination ../dist)
+          [ -s "dist/${tarball}" ] || { echo "::error::npm pack did not produce dist/${tarball}"; exit 1; }
+          tar -tzf "dist/${tarball}" | grep -qx 'package/skills/crossmatrix/SKILL.md' \
+            || { echo "::error::dist/${tarball} does not contain package/skills/crossmatrix/SKILL.md"; exit 1; }
+          # The maintainer checks the tarball against this digest before publishing.
+          (cd dist && sha256sum "${tarball}" > npm-package.sha256)
+          gh release upload "$TAG" "dist/${tarball}" dist/npm-package.sha256 --clobber
       - name: publish release (complete matrix verified)
         shell: bash
         env:
@@ -171,6 +185,68 @@ jobs:
         run: |
           set -euo pipefail
           gh release edit "$TAG" --draft=false
+
+  npm:
+    name: npm publish
+    needs: finalize
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    # Publication is gated on the tag matching every manifest version via
+    # scripts/check-version-sync.sh in create-release, and on the repository
+    # variable below. npm authenticates this job over GitHub OIDC (trusted
+    # publishing: the trusted publisher on npmjs.com names praxec/crossmatrix,
+    # release.yml and the `npm` environment); no NPM_TOKEN is stored. The
+    # environment can require a maintainer's approval before the job starts.
+    if: vars.NPM_TRUSTED_PUBLISHING == 'true'
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      # The checkout supplies scripts/npm-publish.sh, which skips a version
+      # already on npm and sends pre-releases to the `next` dist-tag.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
+      - name: install npm with trusted publishing support
+        run: npm install -g npm@11.6.2
+      - name: download the release tarball and verify its digest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          V="${TAG#v}"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir npm-dist \
+            --pattern "matthew-cochran-crossmatrix-${V}.tgz" --pattern npm-package.sha256
+          (cd npm-dist && sha256sum -c npm-package.sha256)
+      - name: publish (skipped if this version is already on npm)
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${TAG#v}"
+          bash scripts/npm-publish.sh "npm-dist/matthew-cochran-crossmatrix-${V}.tgz" "$V"
+      - name: verify the published launcher runs the release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${TAG#v}"
+          # The registry can take a moment to serve a new version.
+          for _ in 1 2 3 4 5 6; do
+            if out=$(npx -y "@matthew-cochran/crossmatrix@${V}" --version 2>/dev/null) \
+              && [ "$out" = "crossmatrix-mcp ${V}" ]; then
+              echo "$out"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "::error::npx @matthew-cochran/crossmatrix@${V} --version did not print crossmatrix-mcp ${V}"
+          exit 1
 
   image:
     name: container image

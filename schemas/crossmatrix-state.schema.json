@@ -10,6 +10,9 @@
     "schemaVersion": { "type": "string" },
     "stateId": { "type": "string" },
     "version": { "type": "string" },
+    "title": { "type": "string" },
+    "status": { "type": "string", "enum": ["draft", "active", "locked", "archived"] },
+    "revision": { "type": "integer", "minimum": 0, "description": "Monotonic model revision used for optimistic CAS (command expectedVersion). Bumped by every accepted crossmatrix.command mutation; absent means 0." },
     "configRef": {
       "type": "object",
       "description": "Stable id+version binding to the Configuration this State observes (NOT a $ref). The merge pins an EXACT (configId, version).",
@@ -36,7 +39,9 @@
         "locator": { "type": "string" },
         "contentHash": { "type": "string" },
         "version": { "type": "string" },
-        "excerpt": { "type": "string" }
+        "excerpt": { "type": "string" },
+        "uri": { "type": "string", "description": "Location of the authoritative source, e.g. file://src/lib.rs or https://...; the stable lookup key for staleness and trace-by-uri." },
+        "hash": { "type": "string", "description": "Content hash of the source at observation time, algorithm-prefixed, e.g. sha256:<hex>. Compared by `stale`." }
       }
     },
     "Evidence": {
@@ -56,6 +61,7 @@
       "additionalProperties": false,
       "properties": {
         "observation": { "type": "string" },
+        "status": { "$ref": "#/$defs/ObservationStatus" },
         "measuredValue": { "type": "number" },
         "provenanceClass": { "$ref": "#/$defs/ProvenanceClass" },
         "confidence": { "$ref": "#/$defs/Confidence" },
@@ -64,6 +70,7 @@
         "rationale": { "type": "string" }
       }
     },
+    "ObservationStatus": { "type": "string", "enum": ["active", "proposed"], "default": "active", "description": "`proposed` = a suggestion (e.g. from a classifier) recorded for review. Proposed observations are kept in the document but excluded from every analysis until someone confirms the cell with an ordinary (active) observation." },
     "StateCell": {
       "type": "object",
       "description": "A non-empty tie holding a SET of source-stamped observations, tagged with the relation + member ids it belongs to (the cells the engine schema nests inside a relation, here keyed by `relationId`).",

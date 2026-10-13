@@ -3,7 +3,19 @@ resolver = "2"
 members = ["crates/crossmatrix", "crates/crossmatrix-mcp"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
+
+# Perf-budget support: the large fixture operations must stay under 1s under a
+# plain debug `cargo test`. Optimize dependencies AND the workspace crates so
+# serialization/validation is not artificially slow in dev.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.crossmatrix-mcp]
+opt-level = 2
+
+[profile.dev.package.crossmatrix]
+opt-level = 2

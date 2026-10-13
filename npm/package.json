@@ -1,0 +1,48 @@
+{
+  "name": "@matthew-cochran/crossmatrix",
+  "version": "0.3.0",
+  "description": "npx launcher for the crossmatrix MCP server (multidimensional House of Quality): downloads the verified release binary for your platform, runs it over stdio, and ships the crossmatrix agent skills.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "crossmatrix",
+    "house-of-quality",
+    "qfd",
+    "crossmatrix-mcp"
+  ],
+  "license": "Apache-2.0",
+  "author": "Matthew Cochran <matthew@cochranweb.com>",
+  "homepage": "https://github.com/praxec/crossmatrix#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/praxec/crossmatrix.git",
+    "directory": "npm"
+  },
+  "bugs": {
+    "url": "https://github.com/praxec/crossmatrix/issues"
+  },
+  "bin": {
+    "crossmatrix-mcp": "bin/crossmatrix-mcp.js"
+  },
+  "files": [
+    "bin/crossmatrix-mcp.js",
+    "lib/install.js",
+    "lib/postinstall.js",
+    "lib/sync-skills.js",
+    "skills/",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "postinstall": "node lib/postinstall.js",
+    "prepack": "node lib/sync-skills.js",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

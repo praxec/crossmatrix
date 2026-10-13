@@ -351,3 +351,122 @@ test('crossmatrix/install.ps1 resolves the native windows/arm64 target', { skip:
   });
   assert.equal(r.stdout.trim(), 'aarch64-pc-windows-msvc');
 });
+
+// ---------------------------------------------------------------------------
+// check-version-sync.sh: every manifest agrees with Cargo.toml
+// ---------------------------------------------------------------------------
+const REPO_ROOT = path.resolve(ROOT, '..');
+const VERSION_FILES = [
+  'Cargo.toml',
+  'Cargo.lock',
+  'server.json',
+  'npm/package.json',
+  'crates/crossmatrix-mcp/Cargo.toml',
+];
+
+// Copies the manifests into a throwaway root so a test can mutate one without
+// touching the repository; the script reads them via its public --root option.
+function versionRoot(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'praxec-version-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const rel of VERSION_FILES) {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    fs.copyFileSync(path.join(REPO_ROOT, rel), path.join(root, rel));
+  }
+  return root;
+}
+
+function runVersionSync(args) {
+  return run('sh', [path.join(ROOT, 'check-version-sync.sh'), ...args]);
+}
+
+function currentVersion() {
+  return JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'npm/package.json'), 'utf8')).version;
+}
+
+test('check-version-sync.sh exits 0 when every manifest agrees', () => {
+  const r = runVersionSync([]);
+  assert.equal(r.status, 0);
+});
+
+test('check-version-sync.sh exits 0 for the release tag matching the manifest version', () => {
+  const r = runVersionSync(['--tag', `v${currentVersion()}`]);
+  assert.equal(r.status, 0);
+});
+
+test('check-version-sync.sh exits 1 when npm/package.json disagrees', (t) => {
+  const root = versionRoot(t);
+  const pkg = path.join(root, 'npm/package.json');
+  const data = JSON.parse(fs.readFileSync(pkg, 'utf8'));
+  data.version = '9.9.9';
+  fs.writeFileSync(pkg, JSON.stringify(data, null, 2));
+  const r = runVersionSync(['--root', root]);
+  assert.equal(r.status, 1);
+});
+
+test('check-version-sync.sh names npm/package.json when it disagrees', (t) => {
+  const root = versionRoot(t);
+  const pkg = path.join(root, 'npm/package.json');
+  const data = JSON.parse(fs.readFileSync(pkg, 'utf8'));
+  data.version = '9.9.9';
+  fs.writeFileSync(pkg, JSON.stringify(data, null, 2));
+  const r = runVersionSync(['--root', root]);
+  assert.match(`${r.stdout}${r.stderr}`, /npm\/package\.json/);
+});
+
+test('check-version-sync.sh reports the mismatching file with a ::error:: line', (t) => {
+  const root = versionRoot(t);
+  const pkg = path.join(root, 'npm/package.json');
+  const data = JSON.parse(fs.readFileSync(pkg, 'utf8'));
+  data.version = '9.9.9';
+  fs.writeFileSync(pkg, JSON.stringify(data, null, 2));
+  const r = runVersionSync(['--root', root]);
+  assert.match(`${r.stdout}${r.stderr}`, /::error::.*npm\/package\.json/);
+});
+
+test('check-version-sync.sh exits 1 when server.json disagrees', (t) => {
+  const root = versionRoot(t);
+  const server = path.join(root, 'server.json');
+  const data = JSON.parse(fs.readFileSync(server, 'utf8'));
+  data.version = '9.9.9';
+  fs.writeFileSync(server, JSON.stringify(data, null, 2));
+  const r = runVersionSync(['--root', root]);
+  assert.equal(r.status, 1);
+});
+
+test('check-version-sync.sh exits 1 when a server.json package disagrees', (t) => {
+  const root = versionRoot(t);
+  const server = path.join(root, 'server.json');
+  const data = JSON.parse(fs.readFileSync(server, 'utf8'));
+  data.packages[0].version = '9.9.9';
+  fs.writeFileSync(server, JSON.stringify(data, null, 2));
+  const r = runVersionSync(['--root', root]);
+  assert.equal(r.status, 1);
+});
+
+test('check-version-sync.sh exits 1 when the release tag disagrees', () => {
+  const r = runVersionSync(['--tag', 'v9.9.9']);
+  assert.equal(r.status, 1);
+});
+
+// ---------------------------------------------------------------------------
+// npm-publish.sh: the tarball must hold the version being published
+// ---------------------------------------------------------------------------
+function fakeTarball(t, version) {
+  const work = tempDir(t);
+  const pkgDir = path.join(work, 'package');
+  fs.mkdirSync(pkgDir, { recursive: true });
+  fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({
+    name: '@matthew-cochran/crossmatrix',
+    version,
+  }));
+  const tarball = path.join(work, 'fake.tgz');
+  execFileSync('tar', ['-czf', tarball, '-C', work, 'package']);
+  return tarball;
+}
+
+test('npm-publish.sh --dry-run refuses a tarball whose internal version differs from the argument', (t) => {
+  const tarball = fakeTarball(t, '1.2.3');
+  const r = run('bash', [path.join(ROOT, 'npm-publish.sh'), tarball, '9.9.9', '--dry-run']);
+  assert.equal(r.status, 1);
+});

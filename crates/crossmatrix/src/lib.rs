@@ -14,11 +14,17 @@
 //! source-traced + contentHash staleness, and the precondition that weighted
 //! analyses require resolvable member weights.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
+pub mod write;
 
 mod raw {
     #![allow(clippy::all, dead_code)]
-    typify::import_types!("schema/crossmatrix.schema.json");
+    typify::import_types!(
+        schema = "schema/crossmatrix.schema.json",
+        replace = { DimensionKind = String },
+        derives = [PartialEq],
+    );
 }
 
 pub use raw::{
@@ -58,6 +64,13 @@ pub enum ValidationError {
         relation_id: String,
         members: Vec<String>,
     },
+    #[error("contains relation '{relation_id}' must have from == to: {detail}")]
+    InvalidHierarchy { relation_id: String, detail: String },
+    #[error("contains relation '{relation_id}' is cyclic: {members:?}")]
+    CyclicHierarchy {
+        relation_id: String,
+        members: Vec<String>,
+    },
 }
 
 /// A sparse contraction frontier: `(source, current endpoint)` -> the
@@ -71,22 +84,47 @@ type ContractionEntry = ((String, String), (f64, BTreeSet<String>));
 /// A validated cross-matrix model. Construct only via [`Model::load`].
 #[derive(Debug, Clone)]
 pub struct Model {
+    /// The FULL validated document (including proposed observations). Persisted
+    /// and exported verbatim by [`Model::doc`] so proposals round-trip.
+    full: CrossMatrixModel,
+    /// The EFFECTIVE analysis view: proposed observations removed and any cell
+    /// left with no observation dropped. Every analysis reads this field.
     doc: CrossMatrixModel,
     /// dimension id -> set of member ids (built once at load).
     members_by_dim: HashMap<String, HashSet<String>>,
+    /// member id -> owning dimension id (first declared wins), built once at load.
+    dim_of: HashMap<String, String>,
+    /// ids of members that are not deprecated, built once at load.
+    active_members: HashSet<String>,
+    /// dimension id -> (child id -> [(parent id, contains relation id)]), built once
+    /// at load from active `contains` relations. Key presence marks an active
+    /// hierarchy on that dimension (even when it has no cells).
+    hierarchy: HashMap<String, HashMap<String, Vec<(String, String)>>>,
 }
 
 impl Model {
     /// Parse + validate (full invariant set per ADR 0002/0003).
     pub fn load(json: &str) -> Result<Self, ValidationError> {
         let doc: CrossMatrixModel = serde_json::from_str(json)?;
+        Self::from_doc(doc)
+    }
 
+    /// Validate an already-parsed document into a [`Model`], running exactly
+    /// the same invariant checks as [`Model::load`]. Used by the write API to
+    /// re-validate a freshly built document before handing it back.
+    pub fn from_doc(doc: CrossMatrixModel) -> Result<Self, ValidationError> {
         let mut members_by_dim: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut dim_of: HashMap<String, String> = HashMap::new();
+        let mut active_members: HashSet<String> = HashSet::new();
         for d in &doc.dimensions {
-            members_by_dim.insert(
-                d.id.clone(),
-                d.members.iter().map(|m| m.id.clone()).collect(),
-            );
+            let ids: HashSet<String> = d.members.iter().map(|m| m.id.clone()).collect();
+            for m in &d.members {
+                dim_of.entry(m.id.clone()).or_insert_with(|| d.id.clone());
+                if member_active(m) {
+                    active_members.insert(m.id.clone());
+                }
+            }
+            members_by_dim.insert(d.id.clone(), ids);
         }
 
         // Build scale -> valid observation token sets
@@ -185,10 +223,80 @@ impl Model {
             });
         }
 
+        // Hierarchy (`contains`) validation: self-relation + acyclic active cells.
+        // Cycle detection is iterative (explicit stack) so deep chains cannot
+        // overflow, and runs in O(V+E) over the relation's active cells.
+        for r in &doc.relations {
+            if r.relation_type != raw::RelationType::Contains {
+                continue;
+            }
+            if r.from != r.to {
+                return Err(ValidationError::InvalidHierarchy {
+                    relation_id: r.id.clone(),
+                    detail: format!("from='{}' to='{}' must be equal", r.from, r.to),
+                });
+            }
+            let mut adj: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for c in &r.cells {
+                if active_members.contains(&c.from) && active_members.contains(&c.to) {
+                    adj.entry(c.from.clone()).or_default().push(c.to.clone());
+                    adj.entry(c.to.clone()).or_default();
+                }
+            }
+            for targets in adj.values_mut() {
+                targets.sort();
+                targets.dedup();
+            }
+            if let Some(members) = find_cycle(&adj) {
+                return Err(ValidationError::CyclicHierarchy {
+                    relation_id: r.id.clone(),
+                    members,
+                });
+            }
+        }
+
+        // Effective analysis view: proposed observations removed, observation-less
+        // cells dropped. Validation above still ran against the FULL document.
+        let effective = effective_view(&doc);
+
+        // Active hierarchy index for `ancestors`/`rolled_up`. Presence of a
+        // dimension key marks an active hierarchy on it (even with zero cells).
+        let mut hierarchy: HashMap<String, HashMap<String, Vec<(String, String)>>> = HashMap::new();
+        for r in effective.relations.iter().filter(|r| relation_active(r)) {
+            if r.relation_type != raw::RelationType::Contains {
+                continue;
+            }
+            let entry = hierarchy.entry(r.from.clone()).or_default();
+            for c in &r.cells {
+                if active_members.contains(&c.from) && active_members.contains(&c.to) {
+                    entry
+                        .entry(c.to.clone())
+                        .or_default()
+                        .push((c.from.clone(), r.id.clone()));
+                }
+            }
+        }
+
         Ok(Model {
-            doc,
+            full: doc,
+            doc: effective,
             members_by_dim,
+            dim_of,
+            active_members,
+            hierarchy,
         })
+    }
+
+    /// The FULL validated document, including proposed observations. Persistence
+    /// and export must round-trip proposals, so this is not the analysis view.
+    #[allow(clippy::misnamed_getters)] // `doc` is the analysis field; `full` is the document.
+    pub fn doc(&self) -> &CrossMatrixModel {
+        &self.full
+    }
+
+    /// The declared observation→value scales.
+    pub fn scales(&self) -> &[ScaleDef] {
+        &self.doc.scales
     }
 
     pub fn dimensions(&self) -> &[Dimension] {
@@ -197,6 +305,31 @@ impl Model {
     pub fn relations(&self) -> &[Relation] {
         &self.doc.relations
     }
+
+    /// Every proposed observation, in relation/cell order, as a review worklist.
+    /// Deprecated relations are excluded; `relation_id` narrows to one relation.
+    pub fn proposals(&self, relation_id: Option<&str>) -> Vec<Proposal> {
+        let mut out = Vec::new();
+        for rel in self.full.relations.iter().filter(|r| relation_active(r)) {
+            if relation_id.is_some_and(|id| id != rel.id) {
+                continue;
+            }
+            for cell in &rel.cells {
+                for observation in &cell.observations {
+                    if is_proposed(observation) {
+                        out.push(Proposal {
+                            relation_id: rel.id.clone(),
+                            from: cell.from.clone(),
+                            to: cell.to.clone(),
+                            observation: observation.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn contraction_ids(&self) -> Vec<&str> {
         self.doc
             .contractions
@@ -737,6 +870,182 @@ impl Model {
             .find_map(|(dim, members)| members.contains(member_id).then_some(dim.as_str()))
     }
 
+    /// All ancestors of `member_id` through every active `contains` hierarchy on
+    /// its dimension, nearest first (BFS order, ties by id), deduplicated.
+    /// Empty when the member has no hierarchy or no ancestors.
+    pub fn ancestors(&self, member_id: &str) -> Vec<String> {
+        self.ancestors_with_via(member_id)
+            .into_iter()
+            .map(|(ancestor, _)| ancestor)
+            .collect()
+    }
+
+    /// `ancestors` paired with the `contains` relation id that reached each one.
+    fn ancestors_with_via(&self, member_id: &str) -> Vec<(String, String)> {
+        let Some(dim) = self.dim_of.get(member_id) else {
+            return Vec::new();
+        };
+        let Some(edges) = self.hierarchy.get(dim) else {
+            return Vec::new();
+        };
+        let mut visited: HashSet<String> = HashSet::new();
+        visited.insert(member_id.to_string());
+        let mut result: Vec<(String, String)> = Vec::new();
+        let mut frontier: Vec<String> = vec![member_id.to_string()];
+        while !frontier.is_empty() {
+            let mut candidates: Vec<(String, String)> = Vec::new();
+            for node in &frontier {
+                if let Some(parents) = edges.get(node) {
+                    for (parent, rel) in parents {
+                        if !visited.contains(parent) {
+                            candidates.push((parent.clone(), rel.clone()));
+                        }
+                    }
+                }
+            }
+            // Nearest level first, ties by id, one edge per ancestor.
+            candidates.sort_by(|a, b| a.0.cmp(&b.0));
+            candidates.dedup_by(|a, b| a.0 == b.0);
+            let mut next_frontier: Vec<String> = Vec::new();
+            for (ancestor, rel) in candidates {
+                if visited.insert(ancestor.clone()) {
+                    result.push((ancestor.clone(), rel));
+                    next_frontier.push(ancestor);
+                }
+            }
+            frontier = next_frontier;
+        }
+        result
+    }
+
+    /// A DERIVED model (never persisted): for every active non-`contains`
+    /// relation whose axis dimension has an active `contains` hierarchy, every
+    /// ancestor of a cell member gains a derived cell for the same counterpart
+    /// (unless a real cell already exists). Real cells are untouched; derived
+    /// observations roll up the strongest descendant token. Each axis is rolled
+    /// independently from real cells only. Validated via [`Model::from_doc`].
+    pub fn rolled_up(&self) -> Model {
+        #[derive(Default)]
+        struct Accum {
+            cell_count: usize,
+            tokens: Vec<String>,
+            via: Vec<String>,
+        }
+
+        let mut out = self.full.clone();
+        let mut derived_by_relation: HashMap<String, Vec<Cell>> = HashMap::new();
+        for rel in self.doc.relations.iter() {
+            if !relation_active(rel)
+                || rel.relation_type == raw::RelationType::Contains
+                || rel.from == rel.to
+            {
+                continue;
+            }
+            let has_from_hierarchy = self.hierarchy.contains_key(&rel.from);
+            let has_to_hierarchy = self.hierarchy.contains_key(&rel.to);
+            if !has_from_hierarchy && !has_to_hierarchy {
+                continue;
+            }
+
+            let real: HashSet<(String, String)> = rel
+                .cells
+                .iter()
+                .map(|c| (c.from.clone(), c.to.clone()))
+                .collect();
+            let ranks = self.token_rank(&rel.scale);
+            let mut accumulated: HashMap<(String, String), Accum> = HashMap::new();
+
+            for cell in &rel.cells {
+                if !self.active_members.contains(&cell.from)
+                    || !self.active_members.contains(&cell.to)
+                {
+                    continue;
+                }
+                if has_from_hierarchy {
+                    for (ancestor, via) in self.ancestors_with_via(&cell.from) {
+                        let key = (ancestor, cell.to.clone());
+                        if real.contains(&key) {
+                            continue;
+                        }
+                        let acc = accumulated.entry(key).or_default();
+                        acc.cell_count += 1;
+                        acc.tokens
+                            .extend(cell.observations.iter().map(|o| o.observation.clone()));
+                        acc.via.push(via);
+                    }
+                }
+                if has_to_hierarchy {
+                    for (ancestor, via) in self.ancestors_with_via(&cell.to) {
+                        let key = (cell.from.clone(), ancestor);
+                        if real.contains(&key) {
+                            continue;
+                        }
+                        let acc = accumulated.entry(key).or_default();
+                        acc.cell_count += 1;
+                        acc.tokens
+                            .extend(cell.observations.iter().map(|o| o.observation.clone()));
+                        acc.via.push(via);
+                    }
+                }
+            }
+
+            if accumulated.is_empty() {
+                continue;
+            }
+
+            let mut derived: Vec<Cell> = accumulated
+                .into_iter()
+                .map(|((from, to), acc)| {
+                    // Strongest token: highest scale value, ties by declared order.
+                    let strongest = acc
+                        .tokens
+                        .iter()
+                        .max_by(|x, y| {
+                            let rx = ranks.get(*x).copied().unwrap_or((f64::NEG_INFINITY, 0));
+                            let ry = ranks.get(*y).copied().unwrap_or((f64::NEG_INFINITY, 0));
+                            rx.partial_cmp(&ry).unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .cloned()
+                        .unwrap_or_default();
+                    let via = acc.via.iter().min().cloned().unwrap_or_default();
+                    let observation: Observation = serde_json::from_value(serde_json::json!({
+                        "observation": strongest,
+                        "rationale": format!(
+                            "rollup: {} descendant cell(s) via {}",
+                            acc.cell_count, via
+                        ),
+                    }))
+                    .expect("derived observation must deserialize");
+                    Cell {
+                        from,
+                        to,
+                        observations: vec![observation],
+                    }
+                })
+                .collect();
+            derived.sort_by(|a, b| (&a.from, &a.to).cmp(&(&b.from, &b.to)));
+            derived_by_relation.insert(rel.id.clone(), derived);
+        }
+        for rel in out.relations.iter_mut() {
+            if let Some(derived) = derived_by_relation.remove(&rel.id) {
+                rel.cells.extend(derived);
+            }
+        }
+        Model::from_doc(out).expect("rolled_up must produce a valid model")
+    }
+
+    /// A scale's `observation -> (value, declared order)` ranking table.
+    fn token_rank(&self, scale_id: &str) -> HashMap<String, (f64, u64)> {
+        let mut ranks = HashMap::new();
+        if let Some(scale) = self.doc.scales.iter().find(|s| s.id == scale_id) {
+            for (index, level) in scale.levels.iter().enumerate() {
+                let order = level.order.map(|o| o.max(0) as u64).unwrap_or(index as u64);
+                ranks.insert(level.observation.clone(), (level.value, order));
+            }
+        }
+        ranks
+    }
+
     /// The core traceability walk: every member related to `member_id` across
     /// all (non-deprecated) relations, one hop per matching cell. Direction is
     /// relative to the traced member: `Out` = it sits on the relation's `from`
@@ -1023,6 +1332,25 @@ fn relation_active(r: &Relation) -> bool {
     !matches!(r.status, Some(raw::LifecycleStatus::Deprecated))
 }
 
+/// A proposed observation is recorded for review and excluded from analyses.
+fn is_proposed(o: &Observation) -> bool {
+    matches!(o.status, Some(raw::ObservationStatus::Proposed))
+}
+
+/// The effective analysis view: drop proposed observations, then drop any cell
+/// that no longer holds an observation. Everything else (members, relations,
+/// proposals) is preserved.
+fn effective_view(doc: &CrossMatrixModel) -> CrossMatrixModel {
+    let mut out = doc.clone();
+    for rel in out.relations.iter_mut() {
+        for cell in rel.cells.iter_mut() {
+            cell.observations.retain(|o| !is_proposed(o));
+        }
+        rel.cells.retain(|c| !c.observations.is_empty());
+    }
+    out
+}
+
 /// The valence of a relation type: `Some(false)` supporting, `Some(true)`
 /// opposing, `None` structural (carries no valence, so it takes no part in
 /// tension analysis). Kept exhaustive on purpose — a new `RelationType` in the
@@ -1037,8 +1365,67 @@ fn relation_opposes(rt: &raw::RelationType) -> Option<bool> {
         // `constrains` bounds a member rather than arguing against it, and
         // `derives_from`/`dependsOn` are pure structure (the latter routes to
         // cyclic/SCC analysis, not valence).
-        R::DerivesFrom | R::Constrains | R::DependsOn => None,
+        R::DerivesFrom | R::Constrains | R::DependsOn | R::Contains => None,
     }
+}
+
+/// Find one cycle in a directed graph, iteratively (explicit stack — no
+/// recursion, so arbitrarily deep chains are safe). Returns the cycle's member
+/// ids in traversal order (start node not repeated), or `None` when acyclic.
+fn find_cycle(adj: &BTreeMap<String, Vec<String>>) -> Option<Vec<String>> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Color {
+        White,
+        Gray,
+        Black,
+    }
+    let mut color: HashMap<&str, Color> = adj.keys().map(|k| (k.as_str(), Color::White)).collect();
+    for start in adj.keys() {
+        if color[start.as_str()] != Color::White {
+            continue;
+        }
+        color.insert(start.as_str(), Color::Gray);
+        let mut path: Vec<&str> = vec![start.as_str()];
+        let mut stack: Vec<(&str, usize)> = vec![(start.as_str(), 0)];
+        while let Some(&(node, index)) = stack.last() {
+            let children = &adj[node];
+            if index < children.len() {
+                let child = children[index].as_str();
+                stack.last_mut().expect("stack is non-empty").1 += 1;
+                match color.get(child).copied().unwrap_or(Color::White) {
+                    Color::White => {
+                        color.insert(child, Color::Gray);
+                        path.push(child);
+                        stack.push((child, 0));
+                    }
+                    Color::Gray => {
+                        let pos = path
+                            .iter()
+                            .position(|x| *x == child)
+                            .expect("gray node is on the path");
+                        return Some(path[pos..].iter().map(|s| s.to_string()).collect());
+                    }
+                    Color::Black => {}
+                }
+            } else {
+                color.insert(node, Color::Black);
+                path.pop();
+                stack.pop();
+            }
+        }
+    }
+    None
+}
+
+/// A proposed observation awaiting review, paired with the relation and cell
+/// endpoints it was recorded against (see [`Model::proposals`]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Proposal {
+    pub relation_id: String,
+    pub from: String,
+    pub to: String,
+    pub observation: Observation,
 }
 
 /// Direction of a [`TraceHop`] relative to the traced member.
