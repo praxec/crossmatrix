@@ -8,7 +8,8 @@ readme = "README.md"
 keywords = ["mcp", "house-of-quality", "qfd", "cross-reference", "llm"]
 categories = ["science", "data-structures"]
 documentation = "https://docs.rs/crossmatrix-mcp"
-# repository / homepage: set to the canonical git URL before publishing.
+repository = "https://github.com/praxec/crossmatrix"
+homepage = "https://github.com/praxec/crossmatrix"
 
 [features]
 default = []

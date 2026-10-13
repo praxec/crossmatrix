@@ -1,7 +1,8 @@
 // release.test.mjs — fast, offline behavioral tests for the Praxec release
 // installers and packaging metadata. Each test makes exactly one behavioral
 // assertion about a public interface (install.sh, install.ps1,
-// release-manifest.sh, mcp-smoke.mjs). No network, no machine-config changes.
+// release-manifest.sh, mcp-smoke.mjs, check-version-sync.sh, npm-publish.sh,
+// npm-release.sh). No network, no machine-config changes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
@@ -469,4 +470,129 @@ test('npm-publish.sh --dry-run refuses a tarball whose internal version differs 
   const tarball = fakeTarball(t, '1.2.3');
   const r = run('bash', [path.join(ROOT, 'npm-publish.sh'), tarball, '9.9.9', '--dry-run']);
   assert.equal(r.status, 1);
+});
+
+// ---------------------------------------------------------------------------
+// npm-release.sh: the maintainer's manual publish of the release tarball.
+// Fake `npm`, `gh` and `npx` on PATH keep every test offline.
+// ---------------------------------------------------------------------------
+const RELEASE_VERSION = '9.8.7';
+
+function writeExe(file, body) {
+  fs.writeFileSync(file, `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
+}
+
+// Builds a release asset dir holding the launcher tarball (with `files`) and
+// its npm-package.sha256, as release.yml's finalize job attaches them.
+function releaseAssets(t, { files, corruptDigest = false } = {}) {
+  const work = tempDir(t);
+  const pkgDir = path.join(work, 'package');
+  const entries = files ?? {
+    'package.json': JSON.stringify({ name: '@matthew-cochran/crossmatrix', version: RELEASE_VERSION }),
+    'LICENSE': 'Apache-2.0',
+    'bin/crossmatrix-mcp.js': '',
+    'skills/crossmatrix/SKILL.md': '---\nname: crossmatrix\n---\n',
+  };
+  for (const [rel, content] of Object.entries(entries)) {
+    fs.mkdirSync(path.dirname(path.join(pkgDir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(pkgDir, rel), content);
+  }
+  const assets = path.join(work, 'assets');
+  fs.mkdirSync(assets);
+  const name = `matthew-cochran-crossmatrix-${RELEASE_VERSION}.tgz`;
+  // List files only: `npm pack` tarballs carry no directory entries.
+  const members = Object.keys(entries).map((rel) => `package/${rel}`);
+  execFileSync('tar', ['-czf', path.join(assets, name), '-C', work, ...members]);
+  const digest = corruptDigest ? '0'.repeat(64) : sha256(path.join(assets, name));
+  fs.writeFileSync(path.join(assets, 'npm-package.sha256'), `${digest}  ${name}\n`);
+  return assets;
+}
+
+// Fake CLIs. State lives in `state/`: `published` appears once `npm publish`
+// ran, and `publish-args` records its arguments.
+function fakeTools(t, { loggedIn = true, alreadyPublished = false, draft = 'false', assets }) {
+  const dir = tempDir(t);
+  const state = path.join(dir, 'state');
+  fs.mkdirSync(state);
+  if (alreadyPublished) fs.writeFileSync(path.join(state, 'published'), '');
+  writeExe(path.join(dir, 'npm'), `
+case "$1" in
+  whoami) ${loggedIn ? 'echo maintainer' : 'exit 1'} ;;
+  view) [ -f "${state}/published" ] && echo "${RELEASE_VERSION}"; exit 0 ;;
+  publish) shift; echo "$@" > "${state}/publish-args"; touch "${state}/published" ;;
+  *) exit 0 ;;
+esac`);
+  writeExe(path.join(dir, 'gh'), `
+case "$1 $2" in
+  "release view") echo "${draft}" ;;
+  "release download")
+    while [ "$#" -gt 0 ]; do [ "$1" = "--dir" ] && dest="$2"; shift; done
+    cp "${assets ?? ''}"/* "$dest"/ ;;
+esac`);
+  writeExe(path.join(dir, 'npx'), `echo "crossmatrix-mcp ${RELEASE_VERSION}"`);
+  return { env: { PATH: `${dir}:${process.env.PATH}`, CROSSMATRIX_RELEASE_WAIT_SECS: '5' }, state };
+}
+
+function runRelease(args, env) {
+  return run('bash', [path.join(ROOT, 'npm-release.sh'), ...args], { env });
+}
+
+test('npm-release.sh --help exits 0', () => {
+  assert.equal(runRelease(['--help']).status, 0);
+});
+
+test('npm-release.sh rejects an argument that is not a version with exit 64', () => {
+  assert.equal(runRelease(['latest']).status, 64);
+});
+
+test('npm-release.sh refuses to run when not logged in to npm', (t) => {
+  const tools = fakeTools(t, { loggedIn: false });
+  assert.equal(runRelease([RELEASE_VERSION], tools.env).status, 1);
+});
+
+test('npm-release.sh skips a version that is already on npm', (t) => {
+  const tools = fakeTools(t, { alreadyPublished: true });
+  assert.match(runRelease([RELEASE_VERSION], tools.env).stdout, /already on npm; nothing to publish/);
+});
+
+test('npm-release.sh refuses a GitHub release that is still a draft', (t) => {
+  const tools = fakeTools(t, { draft: 'true', assets: releaseAssets(t) });
+  assert.match(runRelease([RELEASE_VERSION], tools.env).stderr, /still a draft/);
+});
+
+test('npm-release.sh refuses a tarball whose digest does not match', (t) => {
+  const tools = fakeTools(t, { assets: releaseAssets(t, { corruptDigest: true }) });
+  assert.match(runRelease([RELEASE_VERSION], tools.env).stderr, /digest mismatch/);
+});
+
+test('npm-release.sh refuses a tarball holding an unexpected file', (t) => {
+  const assets = releaseAssets(t, {
+    files: {
+      'package.json': JSON.stringify({ version: RELEASE_VERSION }),
+      'skills/crossmatrix/SKILL.md': '',
+      'test/secret.test.mjs': '',
+    },
+  });
+  const tools = fakeTools(t, { assets });
+  assert.match(runRelease([RELEASE_VERSION], tools.env).stderr, /unexpected files/);
+});
+
+test('npm-release.sh refuses a tarball without the bundled agent skills', (t) => {
+  const assets = releaseAssets(t, {
+    files: { 'package.json': JSON.stringify({ version: RELEASE_VERSION }), 'LICENSE': '' },
+  });
+  const tools = fakeTools(t, { assets });
+  assert.match(runRelease([RELEASE_VERSION], tools.env).stderr, /does not bundle the agent skills/);
+});
+
+test('npm-release.sh publishes the verified release tarball publicly under latest', (t) => {
+  const tools = fakeTools(t, { assets: releaseAssets(t) });
+  runRelease([RELEASE_VERSION], tools.env);
+  const args = fs.readFileSync(path.join(tools.state, 'publish-args'), 'utf8');
+  assert.match(args, new RegExp(`matthew-cochran-crossmatrix-${RELEASE_VERSION}\\.tgz --access public --tag latest\\s*$`));
+});
+
+test('npm-release.sh exits 0 after the published launcher reports the release version', (t) => {
+  const tools = fakeTools(t, { assets: releaseAssets(t) });
+  assert.equal(runRelease([RELEASE_VERSION], tools.env).status, 0);
 });

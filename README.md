@@ -245,5 +245,9 @@ curl -fsSL https://raw.githubusercontent.com/praxec/packs/main/setup.sh | bash
 See the [pack registry](https://github.com/praxec/packs) for this tool's provider coordinates
 (container image / release binary) and which packs depend on it.
 
+## Releasing
+
+Maintainers: see [docs/releasing.md](docs/releasing.md) (version bump, `dev` → `main`, tag, `scripts/npm-release.sh`, crates.io, rollback).
+
 ## License
 [Apache-2.0](LICENSE).
