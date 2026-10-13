@@ -1,6 +1,6 @@
 {
   "name": "@matthew-cochran/crossmatrix",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "npx launcher for the crossmatrix MCP server (multidimensional House of Quality): downloads the verified release binary for your platform, runs it over stdio, and ships the crossmatrix agent skills.",
   "keywords": [
     "mcp",

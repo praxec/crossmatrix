@@ -616,3 +616,13 @@ test('npm-release.sh exits 0 after the published launcher reports the release ve
   const tools = fakeTools(t, { assets: releaseAssets(t) });
   assert.equal(runRelease([RELEASE_VERSION], tools.env).status, 0);
 });
+
+// ---------------------------------------------------------------------------
+// Dockerfile: the MCP registry accepts the OCI package only when the image
+// carries a server-name label equal to server.json's `name`.
+// ---------------------------------------------------------------------------
+test('Dockerfile labels the image with server.json name for the MCP registry', () => {
+  const name = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'server.json'), 'utf8')).name;
+  const dockerfile = fs.readFileSync(path.join(REPO_ROOT, 'Dockerfile'), 'utf8');
+  assert.match(dockerfile, new RegExp(`^LABEL io\\.modelcontextprotocol\\.server\\.name="${name.replace(/[.]/g, '\\.')}"$`, 'm'));
+});
