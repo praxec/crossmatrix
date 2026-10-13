@@ -39,6 +39,18 @@ All notable changes to this project are documented here. The format follows
 - **Performance budget**: on 10k members × 200 features, `members.sync`,
   `stale` and `trace` each finish under 1 s (enforced by tests).
 
+- **npm launcher** `@matthew-cochran/crossmatrix` (`npx -y @matthew-cochran/crossmatrix`):
+  downloads the platform release asset, verifies it against `checksums.sha256`,
+  caches it and runs it with stdio inherited and signals forwarded. It bundles
+  the agent skills. The release workflow publishes it via npm trusted publishing,
+  gated on the tag matching every manifest version (`scripts/check-version-sync.sh`).
+- **Agent skills** (`skills/`): `crossmatrix`, `crossmatrix-hoq`, `crossmatrix-jtbd`,
+  `crossmatrix-competitive`, `crossmatrix-test-coverage`, `crossmatrix-risk`,
+  `crossmatrix-prioritize`, `crossmatrix-review`.
+- **`crossmatrix-mcp skills install|uninstall|list`** for claude, codex, cursor,
+  copilot, gemini, agents-md or all, with a hash manifest, user-edit protection,
+  dry runs and atomic writes; it prints (never writes) MCP registration.
+
 ### Changed
 - `DimensionKind` is an open snake_case vocabulary; domain meaning lives in
   configurations and skills, not engine code.
