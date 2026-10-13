@@ -18,7 +18,9 @@ On a branch off `dev`, set the same version in every file that carries it:
   dependency (`crossmatrix = { version = "X.Y.Z", path = "../crossmatrix" }`).
 - `Cargo.lock`: run `cargo check` so the lock file records the new
   `crossmatrix` and `crossmatrix-mcp` versions.
-- `server.json`: the top-level `version` and every `packages[].version`.
+- `server.json`: the top-level `version` and the tag of the OCI package
+  identifier (`ghcr.io/praxec/crossmatrix:X.Y.Z`). The OCI package has no
+  `version` field: the MCP registry rejects one.
 - `npm/package.json`: `version` (the launcher downloads the GitHub release with
   this version, so it must match).
 
