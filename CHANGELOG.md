@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `scripts/npm-release.sh`: the maintainer's manual npm release of the launcher tarball attached to a GitHub release (digest, contents and bundled-skills checks; 2FA prompt; post-publish `npx --version` check), and `docs/releasing.md`, the release runbook.
+
 ## [0.3.0] - 2026-10-12
 
 ### Added
