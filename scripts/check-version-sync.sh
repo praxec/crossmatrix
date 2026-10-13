@@ -5,7 +5,10 @@
 # Compares, against Cargo.toml:
 #   - the `crossmatrix` dependency in crates/crossmatrix-mcp/Cargo.toml
 #   - the `crossmatrix` and `crossmatrix-mcp` entries in Cargo.lock
-#   - server.json's top-level `version` and every `packages[].version`
+#   - server.json's top-level `version`, the tag of every OCI package
+#     `identifier` (`ghcr.io/owner/image:X.Y.Z`; the MCP registry rejects a
+#     `version` field on OCI packages, so one is an error), and the `version`
+#     of every non-OCI package
 #   - npm/package.json's `version`
 # With `--tag vX.Y.Z` the tag (minus the leading `v`) must equal that version.
 #
@@ -32,7 +35,7 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     -h|--help)
-      sed -n '2,13p' "$0"
+      sed -n '2,16p' "$0"
       exit 0
       ;;
     *)
@@ -71,12 +74,27 @@ fail() {
 json_scalar() {
   python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], "<missing>"))' "$1" "$2"
 }
-json_package_versions() {
+# Prints one problem per line for server.json's packages (nothing when they
+# all carry the expected version).
+server_package_problems() {
   python3 -c '
 import json, sys
-for pkg in json.load(open(sys.argv[1])).get("packages") or []:
-    print(pkg.get("version", "<missing>"))
-' "$1"
+expected = sys.argv[2]
+for i, pkg in enumerate(json.load(open(sys.argv[1])).get("packages") or []):
+    if pkg.get("registryType") == "oci":
+        ident = pkg.get("identifier", "")
+        name, sep, tag = ident.rpartition(":")
+        if not sep or "/" in tag:
+            tag = "<untagged>"
+        if tag != expected:
+            print(f"packages[{i}].identifier tag {tag} != expected {expected}")
+        if "version" in pkg:
+            print(f"packages[{i}] has a version field (OCI packages must carry the version in the identifier tag)")
+    else:
+        version = pkg.get("version", "<missing>")
+        if version != expected:
+            print(f"packages[{i}].version {version} != expected {expected}")
+' "$1" "$2"
 }
 
 # crates/crossmatrix-mcp/Cargo.toml: the intra-workspace `crossmatrix` dependency.
@@ -102,23 +120,19 @@ if [ -n "$lock_bad" ]; then
   fail "Cargo.lock version $lock_bad != expected $expected"
 fi
 
-# server.json: top-level version and every packages[].version (one line for the
-# file, even when several fields disagree).
+# server.json: top-level version, then each package (one line for the file,
+# even when several fields disagree).
 server_top=$(json_scalar "$server_json" version)
-server_pkg_versions=$(json_package_versions "$server_json")
 server_bad=""
 if [ "$server_top" != "$expected" ]; then
-  server_bad="version $server_top"
+  server_bad="version $server_top != expected $expected"
 else
-  for version in $server_pkg_versions; do
-    if [ "$version" != "$expected" ]; then
-      server_bad="packages[].version $version"
-      break
-    fi
-  done
+  problems=$(server_package_problems "$server_json" "$expected") \
+    || { echo "check-version-sync: could not read the packages in $server_json" >&2; exit 2; }
+  server_bad=$(printf '%s\n' "$problems" | head -n 1)
 fi
 if [ -n "$server_bad" ]; then
-  fail "server.json $server_bad != expected $expected"
+  fail "server.json $server_bad"
 fi
 
 # npm/package.json: the launcher manifest.

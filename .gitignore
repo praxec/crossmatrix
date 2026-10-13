@@ -2,3 +2,4 @@
 /internal
 npm/skills/
 npm/*.tgz
+crates/crossmatrix-mcp/skills/

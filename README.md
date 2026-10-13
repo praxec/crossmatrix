@@ -38,7 +38,7 @@ Pin a specific release instead of the current latest stable:
 
 ```sh
 curl -fsSL https://github.com/praxec/crossmatrix/releases/latest/download/install.sh \
-  | sh -s -- --version v0.3.0
+  | sh -s -- --version v0.3.1
 ```
 
 The installer scripts are published as release assets alongside the binaries.
@@ -244,6 +244,10 @@ curl -fsSL https://raw.githubusercontent.com/praxec/packs/main/setup.sh | bash
 
 See the [pack registry](https://github.com/praxec/packs) for this tool's provider coordinates
 (container image / release binary) and which packs depend on it.
+
+## Releasing
+
+Maintainers: see [docs/releasing.md](docs/releasing.md) (version bump, `dev` → `main`, tag, `scripts/npm-release.sh`, crates.io, rollback).
 
 ## License
 [Apache-2.0](LICENSE).
