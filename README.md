@@ -38,7 +38,7 @@ Pin a specific release instead of the current latest stable:
 
 ```sh
 curl -fsSL https://github.com/praxec/crossmatrix/releases/latest/download/install.sh \
-  | sh -s -- --version v0.2.1
+  | sh -s -- --version v0.3.0
 ```
 
 The installer scripts are published as release assets alongside the binaries.
@@ -173,6 +173,37 @@ imports it into the session (in memory) for the queries that follow.
 - `stale {hashes?, readFiles?}` compares stored source hashes with current ones
   (`readFiles` hashes `file://` sources inside the project) and returns the
   changed members plus every cell that references them, paged.
+
+## AI assist (optional, off by default)
+
+Two optional cargo features add model-backed helpers. Neither is in the default
+build or the release binaries unless you build with them, both need an explicit
+opt-in **and** a key, and neither ever writes an analysis number: suggestions
+are recorded as *proposed* observations that count in no analysis until a human
+or LLM confirms the cell with an ordinary `observe`.
+
+```sh
+cargo build --release --features jev,rig
+export CROSSMATRIX_ASSIST=jev,rig            # explicit opt-in (or `all`)
+export TYPESAFE_JEV_API_KEY=...              # or OPENROUTER_API_KEY (also used by rig)
+```
+
+| Query | Feature | What it does |
+|---|---|---|
+| `assist.suggest {relationId, cells?, maxCells?, record?}` | `jev` | For each candidate cell (default: from `gaps.next`), asks Jev a choice question over the relation's scale tokens, with a compact state from the two members' labels, descriptions and evidence. Returns `{cell, token, probabilities, confidence}` per cell; `record: true` stores them as `proposed` observations by actor `{classifier, jev}`. |
+| `gaps.next {rankBy: "uncertainty", relationId}` | `jev` | Ranks candidate cells by Jev uncertainty (1 − confidence). |
+| `proposals {relationId?}` | — | Lists proposed observations awaiting confirmation. |
+| `assist.members {dimensionId, sourceText, sourceUri?}` | `rig` | Proposes new members from supplied text (README, interview notes, a competitor page), each with a verbatim excerpt and its character span. Never adds them; each comes with a ready `member.propose` payload. |
+| `assist.narrative {relationId?}` / `report {narrative: true}` | `rig` | A short narrative of `analyze.findings` for the report. |
+
+Configuration: Jev uses `https://api.typesafe.ai` with `jev-latest` when
+`TYPESAFE_JEV_API_KEY` is set, otherwise OpenRouter with `~typesafe/jev-latest`;
+override with `CROSSMATRIX_JEV_BASE_URL`, `CROSSMATRIX_JEV_MODEL` and
+`CROSSMATRIX_JEV_TIMEOUT_SECS`. Rig uses OpenRouter with `CROSSMATRIX_RIG_MODEL`
+(default `openai/gpt-5-mini`) and `CROSSMATRIX_RIG_TIMEOUT_SECS`. Calls are
+bounded (timeout, cells per call, token budget) and every response reports
+`usage`. Without the feature, opt-in or key, the query returns
+`{ok: false, status: "assist_unavailable", reason, links}`.
 
 ## Agent skills
 

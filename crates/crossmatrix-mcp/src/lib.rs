@@ -1,5 +1,6 @@
 //! crossmatrix-mcp library crate — schema types generated from canonical JSON Schemas.
 
+pub mod assist_rig;
 pub mod cli;
 pub mod merge;
 pub mod queries;
@@ -9,6 +10,9 @@ pub mod schema_types;
 pub mod session;
 pub mod skills;
 pub mod store;
+
+pub mod assist;
+pub mod assist_dispatch;
 
 use crate::store::ConfigStore;
 use crate::store::DimensionsStore;

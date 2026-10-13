@@ -10,10 +10,19 @@ categories = ["science", "data-structures"]
 documentation = "https://docs.rs/crossmatrix-mcp"
 # repository / homepage: set to the canonical git URL before publishing.
 
+[features]
+default = []
+jev = ["dep:reqwest", "dep:async-trait"]
+test-fakes = []
+rig = ["dep:rig-core", "dep:async-trait"]
+
 [dependencies]
 anyhow = "1.0.103"
-crossmatrix = { version = "0.2.1", path = "../crossmatrix" }
+async-trait = { version = "0.1", optional = true }
+crossmatrix = { version = "0.3.0", path = "../crossmatrix" }
 jsonschema = { version = "0.46", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+rig-core = { version = "0.39", default-features = false, features = ["reqwest", "rustls"], optional = true }
 rmcp = { version = "1.7", default-features = false, features = ["server", "macros", "transport-io"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
@@ -23,3 +32,4 @@ typify = "0.7.0"
 
 [dev-dependencies]
 tempfile = "3.23.1"
+wiremock = "0.6"

@@ -6,7 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-12
+
 ### Added
+- **AI assist (optional cargo features, off by default; explicit opt-in
+  `CROSSMATRIX_ASSIST` plus a key).** `jev`: `assist.suggest` asks Jev (TypeSafe,
+  or OpenRouter `~typesafe/jev-latest`) a choice question over a relation's
+  scale tokens for each candidate cell and returns `{cell, token, probabilities,
+  confidence}`; `record: true` stores them as **proposed** observations by
+  actor `{classifier, jev}`; `gaps.next {rankBy: "uncertainty"}`. `rig`:
+  `assist.members` proposes members from supplied text with verbatim spans (never
+  auto-added) and `assist.narrative` / `report {narrative: true}` narrate the
+  findings. Calls are bounded and report usage; without the feature, opt-in or
+  key the result is a typed `assist_unavailable` with links.
+- **Proposed observations** (`Observation.status: proposed`) and the
+  `proposals` query: stored and exported, excluded from every analysis until a
+  cell is confirmed with an ordinary `observe`.
 - **Repo-committed store** (`.crossmatrix/`): Configuration, Dimensions and
   State documents stored by stable `id@version` (ADR-0004), canonical JSON
   (sorted keys, 2-space indent, trailing newline) written atomically, plus an
