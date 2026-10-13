@@ -38,7 +38,7 @@ Pin a specific release instead of the current latest stable:
 
 ```sh
 curl -fsSL https://github.com/praxec/crossmatrix/releases/latest/download/install.sh \
-  | sh -s -- --version v0.3.0
+  | sh -s -- --version v0.3.1
 ```
 
 The installer scripts are published as release assets alongside the binaries.

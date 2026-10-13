@@ -21,6 +21,10 @@ On a branch off `dev`, set the same version in every file that carries it:
 - `server.json`: the top-level `version` and the tag of the OCI package
   identifier (`ghcr.io/praxec/crossmatrix:X.Y.Z`). The OCI package has no
   `version` field: the MCP registry rejects one.
+
+`Dockerfile` labels the image `io.modelcontextprotocol.server.name` with
+`server.json`'s `name`; the MCP registry rejects an image without it (a test
+in `scripts/release.test.mjs` keeps them equal).
 - `npm/package.json`: `version` (the launcher downloads the GitHub release with
   this version, so it must match).
 
