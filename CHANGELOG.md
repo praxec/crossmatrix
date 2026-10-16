@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-16
+
+### Security
+- `cargo update` of 73 crates; `cargo deny` advisories and `cargo audit` are clean, and clippy (`-D warnings`), fmt and the workspace tests pass (#28).
+
 ## [0.3.1] - 2026-10-13
 
 ### Fixed

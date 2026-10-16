@@ -236,14 +236,15 @@ jobs:
         run: |
           set -euo pipefail
           V="${TAG#v}"
-          # The registry can take a moment to serve a new version.
-          for _ in 1 2 3 4 5 6; do
+          # The registry can take several minutes to serve a new version (v0.3.0
+          # took ~5 min; v0.3.1 outlasted a 2-minute window), so wait up to ~10 min.
+          for _ in $(seq 1 20); do
             if out=$(npx -y "@matthew-cochran/crossmatrix@${V}" --version 2>/dev/null) \
               && [ "$out" = "crossmatrix-mcp ${V}" ]; then
               echo "$out"
               exit 0
             fi
-            sleep 20
+            sleep 30
           done
           echo "::error::npx @matthew-cochran/crossmatrix@${V} --version did not print crossmatrix-mcp ${V}"
           exit 1
