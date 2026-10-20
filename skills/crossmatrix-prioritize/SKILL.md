@@ -1,11 +1,14 @@
 ---
 name: crossmatrix-prioritize
-description: "Rank deliverables against weighted value drivers with crossmatrix-mcp and hand the ranked list to a planner such as cpm-planner. Use when the user asks what to build first, wants a value-weighted backlog, or needs a priority order derived from needs, gaps, risks or competitive gaps rather than gut feel."
+description: "Use when the user asks what to build first, wants a value-weighted backlog, or needs a priority order derived from needs, gaps, risks or competitive gaps rather than gut feel. Rank deliverables against weighted value drivers with crossmatrix-mcp and hand the ranked list to a planner such as cpm-planner."
 ---
 
 # Deliverables × value drivers
 
 Read [crossmatrix](../crossmatrix/SKILL.md) first.
+
+Calling the tools: see [Calling the tools](../crossmatrix/SKILL.md#calling-the-tools)
+(registered MCP server or a host wrapper such as `junior tools call`).
 
 ## Model
 

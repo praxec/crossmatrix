@@ -1,12 +1,15 @@
 ---
 name: crossmatrix-hoq
-description: "Build a classic House of Quality (QFD) with crossmatrix-mcp: weighted customer needs (WHATs) against engineering characteristics (HOWs), the correlation roof between characteristics, technical-importance ranking and targets. Use when the user asks for a House of Quality, QFD, needs-to-characteristics matrix, or which engineering characteristics matter most."
+description: "Use when the user asks for a House of Quality, QFD, needs-to-characteristics matrix, or which engineering characteristics matter most. Build a classic House of Quality (QFD) with crossmatrix-mcp: weighted customer needs (WHATs) against engineering characteristics (HOWs), the correlation roof between characteristics, technical-importance ranking and targets."
 ---
 
 # House of Quality with crossmatrix
 
 Read [crossmatrix](../crossmatrix/SKILL.md) first for the envelope, observation-only rules
 and the driver loop. Every op below is a `crossmatrix.command` `op`.
+
+Calling the tools: see [Calling the tools](../crossmatrix/SKILL.md#calling-the-tools)
+(registered MCP server or a host wrapper such as `junior tools call`).
 
 ## 1. Frame
 

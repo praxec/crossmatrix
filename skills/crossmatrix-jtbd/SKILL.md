@@ -1,12 +1,15 @@
 ---
 name: crossmatrix-jtbd
-description: "Map jobs to be done against user segments and journey steps with crossmatrix-mcp, then contract the axes to see which journey steps carry the most weighted job importance per segment. Use when the user wants a JTBD map, a jobs-by-segment matrix, journey coverage of jobs, or to find under-served jobs and journey steps."
+description: "Use when the user wants a JTBD map, a jobs-by-segment matrix, journey coverage of jobs, or to find under-served jobs and journey steps. Map jobs to be done against user segments and journey steps with crossmatrix-mcp, then contract the axes to see which journey steps carry the most weighted job importance per segment."
 ---
 
 # Jobs to be done × segments × journeys
 
 Read [crossmatrix](../crossmatrix/SKILL.md) first. This is a three-axis model joined by a
 contraction.
+
+Calling the tools: see [Calling the tools](../crossmatrix/SKILL.md#calling-the-tools)
+(registered MCP server or a host wrapper such as `junior tools call`).
 
 ## Axes
 
