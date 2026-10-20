@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-20
+
+### Changed
+- Agent skills now trigger on cross-referencing work: their descriptions lead with the cross-reference task (traceability, House of Quality, risk × component) so a host selects them when needs, features, tests, risks or code must be cross-referenced (#31).
+- Skills document **Calling the tools**: the method names and arguments are the same whether the MCP server is registered or reached through a host wrapper such as `junior tools call`, and no server registration is needed just to follow a skill (#31).
+
 ## [0.3.2] - 2026-10-16
 
 ### Security

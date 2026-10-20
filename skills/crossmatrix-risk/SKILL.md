@@ -1,12 +1,15 @@
 ---
 name: crossmatrix-risk
-description: "Cross failure modes against components or requirements with crossmatrix-mcp: import FMECA criticality as deterministic weights, separate exposes from mitigates, and find unmitigated critical exposure. Pairs with fmeca-mcp. Use when the user wants a risk × component matrix, to tie an FMECA to the design, or to see which requirements carry the most failure exposure."
+description: "Use when the user wants a risk × component matrix, to tie an FMECA to the design, or to see which requirements carry the most failure exposure. Cross failure modes against components or requirements with crossmatrix-mcp: import FMECA criticality as deterministic weights, separate exposes from mitigates, and find unmitigated critical exposure. Pairs with fmeca-mcp."
 ---
 
 # Failure modes × components / requirements
 
 Read [crossmatrix](../crossmatrix/SKILL.md) first. Criticality comes from an FMECA (for
 example fmeca-mcp `report.export`), never from you.
+
+Calling the tools: see [Calling the tools](../crossmatrix/SKILL.md#calling-the-tools)
+(registered MCP server or a host wrapper such as `junior tools call`).
 
 ## Model
 

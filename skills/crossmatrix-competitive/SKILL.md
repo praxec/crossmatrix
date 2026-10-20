@@ -1,11 +1,14 @@
 ---
 name: crossmatrix-competitive
-description: "Benchmark customer needs against competitors (including your own product) with crossmatrix-mcp and find the gaps worth winning: high-importance needs every competitor serves weakly. Use when the user asks for competitive benchmarking, a competitor matrix, a QFD planning matrix, or where to differentiate."
+description: "Use when the user asks for competitive benchmarking, a competitor matrix, a QFD planning matrix, or where to differentiate. Benchmark customer needs against competitors (including your own product) with crossmatrix-mcp and find the gaps worth winning: high-importance needs every competitor serves weakly."
 ---
 
 # Needs × competitors
 
 Read [crossmatrix](../crossmatrix/SKILL.md) first.
+
+Calling the tools: see [Calling the tools](../crossmatrix/SKILL.md#calling-the-tools)
+(registered MCP server or a host wrapper such as `junior tools call`).
 
 ## Model
 

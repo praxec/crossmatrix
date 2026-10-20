@@ -1,6 +1,6 @@
 ---
 name: crossmatrix
-description: "Method reference for the crossmatrix-mcp tools (crossmatrix.command and crossmatrix.query): a generic, multidimensional House of Quality / weighted cross-reference matrix. Use when you build, fill or read any crossmatrix model, or when no narrower crossmatrix-* skill fits. Covers the Configuration / Dimensions / State split, observation-only writes (tokens plus evidence, never numbers), the driver loop (gaps.next, observe, analyze), scoped slices, optimistic versions and requestIds, links, and the committed .crossmatrix/ store."
+description: "Use when needs, features, tests, risks or code must be cross-referenced in a weighted matrix (traceability, House of Quality), or when you build, fill or read any crossmatrix model, or when no narrower crossmatrix-* skill fits. Method reference for the crossmatrix-mcp tools (crossmatrix.command and crossmatrix.query): a generic, multidimensional House of Quality / weighted cross-reference matrix. Covers the Configuration / Dimensions / State split, observation-only writes (tokens plus evidence, never numbers), the driver loop (gaps.next, observe, analyze), scoped slices, optimistic versions and requestIds, links, and the committed .crossmatrix/ store."
 ---
 
 # crossmatrix
@@ -19,6 +19,23 @@ in these skills, never in the engine.
 | State | cells: observations on member pairs | `observe`, `evidence.attach`, `deprecate` |
 
 Findings are computed on every read and are never stored.
+
+## Calling the tools
+
+The tools are the same whichever way you reach them; the method names and
+arguments in this skill do not change.
+
+- **Registered MCP server.** When `crossmatrix-mcp` is registered with your agent
+  host, call the tools directly (`crossmatrix.query` with its arguments).
+- **Through a host wrapper.** When the server is not registered, a wrapper can
+  spawn the binary per call. With Junior, `junior tools call crossmatrix crossmatrix.query
+  key=value ...` takes inline arguments (values parse as JSON),
+  `echo '{"tool":"crossmatrix.query","arguments":{...}}' | junior tools call crossmatrix -`
+  reads the request from stdin, and `junior tools call crossmatrix request.json`
+  reads it from a file. Each call prints the bare result.
+
+Do not register a server just to follow this skill; use whichever route your
+host already has.
 
 ## The store: `.crossmatrix/` (commit it)
 

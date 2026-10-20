@@ -1,12 +1,15 @@
 ---
 name: crossmatrix-review
-description: "Review and sign off a crossmatrix model before it is relied on: run crossmatrix-mcp check, validate, conflicts, stale and coverage, produce the Markdown report, and walk a sign-off checklist. Use when the user asks to review, audit, validate or sign off a House of Quality or any crossmatrix model, or before committing .crossmatrix/ changes."
+description: "Use when the user asks to review, audit, validate or sign off a House of Quality or any crossmatrix model, or before committing .crossmatrix/ changes. Review and sign off a crossmatrix model before it is relied on: run crossmatrix-mcp check, validate, conflicts, stale and coverage, produce the Markdown report, and walk a sign-off checklist."
 ---
 
 # Review and sign-off
 
 Read [crossmatrix](../crossmatrix/SKILL.md) first. Review is read-only: it never writes
 except to record fixes the reviewer approves.
+
+Calling the tools: see [Calling the tools](../crossmatrix/SKILL.md#calling-the-tools)
+(registered MCP server or a host wrapper such as `junior tools call`).
 
 ## 1. Integrity
 
