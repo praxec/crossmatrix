@@ -1,11 +1,14 @@
 ---
 name: crossmatrix-test-coverage
-description: "Trace requirements or journey steps to tests with crossmatrix-mcp: a requirements × tests matrix whose orphans are untested requirements and orphan tests, weighted so the most important untested requirement comes first. Use when the user asks about test coverage of requirements, a traceability matrix, untested features, or which tests to write next."
+description: "Use when the user asks about test coverage of requirements, a traceability matrix, untested features, or which tests to write next. Trace requirements or journey steps to tests with crossmatrix-mcp: a requirements × tests matrix whose orphans are untested requirements and orphan tests, weighted so the most important untested requirement comes first."
 ---
 
 # Requirements / journeys × tests
 
 Read [crossmatrix](../crossmatrix/SKILL.md) first.
+
+Calling the tools: see [Calling the tools](../crossmatrix/SKILL.md#calling-the-tools)
+(registered MCP server or a host wrapper such as `junior tools call`).
 
 ## Model
 
