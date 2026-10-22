@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-10-22
+
+### Fixed
+- `crossmatrix.query` without `query.kind`, or with an unknown kind, is rejected with `invalid_params` naming the expected shape and the supported kinds, instead of returning `ok: true` with a stale "not supported in this build" note ([#25](https://github.com/praxec/crossmatrix/issues/25)).
+- `crossmatrix.command` with neither `op` nor an import `model` is rejected the same way, naming the command envelope.
+- The `crossmatrix-mcp` README status no longer says mutation ops are deferred.
+
 ## [0.3.3] - 2026-10-20
 
 ### Changed

@@ -352,3 +352,74 @@ fn legacy_stale_without_params_keeps_returning_findings() {
         "legacy stale must keep returning engine findings"
     );
 }
+
+// ── malformed / unrecognized query requests ──
+
+/// Drive the raw `crossmatrix.query` entry point with a whole tool request.
+fn raw(session: &Session, request: Value) -> Result<Value, Rejection> {
+    queries::query(session, &request)
+}
+
+#[test]
+fn query_without_kind_is_rejected_as_invalid_params() {
+    let session = travel_mug();
+    let rejection =
+        raw(&session, json!({ "query": {} })).expect_err("missing query.kind must be rejected");
+    assert_eq!(rejection.code, "invalid_params");
+}
+
+#[test]
+fn query_with_op_instead_of_kind_is_rejected_as_invalid_params() {
+    let session = travel_mug();
+    let rejection = raw(&session, json!({ "op": "validate" }))
+        .expect_err("a request without query.kind must be rejected");
+    assert_eq!(rejection.code, "invalid_params");
+}
+
+#[test]
+fn query_without_kind_error_names_the_expected_parameter() {
+    let session = travel_mug();
+    let rejection =
+        raw(&session, json!({ "query": {} })).expect_err("missing query.kind must be rejected");
+    assert!(
+        rejection.message.contains("query.kind"),
+        "the error must name the expected shape, got: {}",
+        rejection.message
+    );
+}
+
+#[test]
+fn unknown_query_kind_is_rejected_as_invalid_params() {
+    let session = travel_mug();
+    let rejection =
+        q(&session, json!({ "kind": "bogus" })).expect_err("unknown query kind must be rejected");
+    assert_eq!(rejection.code, "invalid_params");
+}
+
+#[test]
+fn unknown_query_kind_error_lists_a_supported_kind() {
+    let session = travel_mug();
+    let rejection =
+        q(&session, json!({ "kind": "bogus" })).expect_err("unknown query kind must be rejected");
+    assert!(
+        rejection.message.contains("slice"),
+        "the error must list supported kinds, got: {}",
+        rejection.message
+    );
+}
+
+#[test]
+fn validate_query_still_succeeds() {
+    let session = travel_mug();
+    let result = q(&session, json!({ "kind": "validate" })).expect("validate must succeed");
+    assert_eq!(result["validated"], json!(true));
+}
+
+#[test]
+fn command_without_op_or_model_is_rejected_as_invalid_params() {
+    let mut session = travel_mug();
+    let rejection = session
+        .command(&json!({ "request": { "op": "validate" } }))
+        .expect_err("a command with neither op nor model must be rejected");
+    assert_eq!(rejection.code, "invalid_params");
+}

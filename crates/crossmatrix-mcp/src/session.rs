@@ -278,14 +278,14 @@ impl Session {
             };
         }
 
-        // (d) legacy no-op response.
+        // (d) neither an op nor an import model: reject, naming the envelope.
         if request.get("op").is_none() {
-            return Ok(json!({
-                "ok": true,
-                "op": "",
-                "note": "op not supported in this build (mutation ops deferred — see ADR-0004; needs a core write-API)",
-                "links": ["query"],
-            }));
+            return Err(Rejection::new(
+                "invalid_params",
+                "command requires 'op' (envelope: schemaVersion, requestId, modelId, actor, op{kind}) or an import 'model'",
+                None,
+                vec!["model.status".to_string(), "describe".to_string()],
+            ));
         }
 
         // (e) validate the request against $defs/CommandRequest.
