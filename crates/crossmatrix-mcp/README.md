@@ -27,9 +27,11 @@ dangling/incompatible references) into a loadable `crossmatrix` engine model.
 
 ## Status
 
-Experimental. Mutation ops (`observe` / `member.propose`) are deferred pending a
-core write API; the current build covers import/validate + the query/analyze
-surface. See `../../adr/` (0003 MCP contract, 0004 schema separation). This crate
+Experimental. `crossmatrix.command` covers the write ops (`observe`,
+`member.propose` and the rest of the command envelope) plus import/validate;
+`crossmatrix.query` covers the query/analyze surface. A request without
+`op`/`model` or `query.kind`, or with an unknown kind, is rejected with
+`invalid_params`. See `../../adr/` (0003 MCP contract, 0004 schema separation). This crate
 depends on `crossmatrix` by path+version — publish `crossmatrix` first, then this.
 Set `repository`/`homepage` in `Cargo.toml` before publishing.
 

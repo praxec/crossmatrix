@@ -21,6 +21,57 @@ const REPORT_LINKS: [&str; 3] = ["conflicts", "export", "analyze.findings"];
 const EXPORT_LINKS: [&str; 3] = ["report", "conflicts", "analyze.findings"];
 const STALE_LINKS: [&str; 4] = ["members.sync", "observe", "trace", "slice"];
 
+/// Every `query.kind` this surface dispatches. Kept beside the match so the
+/// invalid-parameter error can name the full supported set.
+const SUPPORTED_QUERY_KINDS: [&str; 17] = [
+    "model.status",
+    "analyze.contract",
+    "analyze.findings",
+    "proposals",
+    "validate",
+    "describe",
+    "slice",
+    "trace",
+    "explain",
+    "coverage",
+    "gaps.orphans",
+    "gaps.next",
+    "analyze.marginalize",
+    "conflicts",
+    "report",
+    "export",
+    "stale",
+];
+
+fn supported_kinds_links() -> Vec<String> {
+    SUPPORTED_QUERY_KINDS
+        .iter()
+        .map(|kind| kind.to_string())
+        .collect()
+}
+
+fn missing_query_kind() -> Rejection {
+    Rejection::new(
+        "invalid_params",
+        "query requires string parameter 'query.kind' \
+         (expected shape: {\"query\":{\"kind\":\"<kind>\"}, ...})",
+        None,
+        supported_kinds_links(),
+    )
+}
+
+fn unknown_query_kind(kind: &str) -> Rejection {
+    Rejection::new(
+        "invalid_params",
+        format!(
+            "unknown query.kind '{kind}'; supported kinds: {}",
+            SUPPORTED_QUERY_KINDS.join(", ")
+        ),
+        None,
+        supported_kinds_links(),
+    )
+}
+
 fn no_model() -> Rejection {
     Rejection::new(
         "no_model",
@@ -198,10 +249,9 @@ fn resolve_selector(model: &Model, selector: &str) -> Result<Vec<String>, Reject
 /// Dispatch one `crossmatrix.query` request. `request` is the whole tool request
 /// (`{query: {kind, ...}}`).
 pub fn query(session: &Session, request: &Value) -> Result<Value, Rejection> {
-    let kind = request
-        .pointer("/query/kind")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let Some(kind) = request.pointer("/query/kind").and_then(Value::as_str) else {
+        return Err(missing_query_kind());
+    };
 
     match kind {
         "model.status" => Ok(session.status()),
@@ -517,12 +567,7 @@ pub fn query(session: &Session, request: &Value) -> Result<Value, Rejection> {
 
         "stale" => stale_query(session, request),
 
-        _ => Ok(json!({
-            "ok": true,
-            "query": kind,
-            "note": "query not supported in this build (conflicts needs valence/tension analysis — ADR-0002; export deferred)",
-            "links": ["describe", "trace", "coverage", "gaps.orphans", "validate"]
-        })),
+        other => Err(unknown_query_kind(other)),
     }
 }
 
